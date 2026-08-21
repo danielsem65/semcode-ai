@@ -31,7 +31,7 @@ object Tools {
                 "source" to S, "destination" to S, required = listOf("source", "destination")),
             t("get_file_info", "Metadata for a path: size, modified date, permissions, entry count.",
                 "path" to S, required = listOf("path")),
-            t("run_command", "Execute one command in the persistent Android shell (toybox/mksh). State survives between calls (cd, env vars). stdin is closed. Default timeout 30s.",
+            t("run_command", "Execute one command in the persistent shared shell (same session as the user's Terminal tab). In Android mode it is toybox/mksh (no apt/git/python); in Linux mode it is a full distro via proot with apt/apk, git and python3, workspace mounted at /workspace. State survives between calls. stdin is closed. Default timeout 30s.",
                 "command" to S, "timeout_seconds" to N, required = listOf("command")),
             t("github_clone", "Download a GitHub repository into a local project folder (snapshot of default/current branch).",
                 "repo" to S, "path" to S, required = listOf("repo")),

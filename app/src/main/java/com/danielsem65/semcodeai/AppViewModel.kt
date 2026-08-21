@@ -137,7 +137,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return withContext(Dispatchers.IO) {
             try {
                 when (name) {
-                    "run_command" -> shell.exec(
+                    "run_command" -> activeShell().exec(
                         args.optString("command", ""),
                         args.optLong("timeout_seconds", 30).coerceIn(1, 600)
                     )
@@ -170,18 +170,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun systemPrompt(): String {
         val root = fileOps.root.path
         val fullMode = settings.fullStorage
+        val app = getApplication<SemApp>()
+        val linuxOn = _termMode.value == "linux" && app.linuxEnv.isInstalled()
+        val shellLine = if (linuxOn)
+            "- Shell: FULL LINUX (${app.linuxEnv.installedLabel()} via proot) through run_command. " +
+                "apt/apk install, git, python3 and the distro's toolchain are available. " +
+                "The workspace is mounted at /workspace. Install packages freely; state persists."
+        else
+            "- Shell: Android toybox/mksh via run_command. Available: ls cat cp mv rm mkdir grep sed awk find tar gzip curl sh. " +
+                "NOT available: apt/sudo/git binaries/python/node/javac. Never pretend a missing toolchain ran; " +
+                "use the dedicated github_* tools for all git operations. " +
+                "(The user can install a full Linux env in Settings for apt/git/python.)"
         return """
 You are SemCode AI — a professional software engineering agent running on the user's Android phone. You plan before acting, write production-quality code, verify your own changes, and never fabricate results.
 
 Environment:
 - Workspace root: $root — all relative paths resolve against it. Create each project in its own subfolder.
 - Storage mode: ${if (fullMode) "FULL device storage enabled" else "app-private workspace (user can enable full storage in Settings)"}. Absolute paths outside the workspace may fail unless full storage is on.
-- Shell: Android toybox/mksh via run_command. Available: ls cat cp mv rm mkdir grep sed awk find tar gzip curl sh. NOT available: apt/sudo/git binaries/python/node/javac. Never pretend a missing toolchain ran; use the dedicated github_* tools for all git operations.
+$shellLine
 
 Working method:
 1. PLAN briefly, then act. Batch independent tool calls.
 2. INSPECT first: list_files/read_file/search_in_files so edits match reality.
-3. EDIT precisely: edit_file requires old_string copied EXACTLY from the file (whitespace included), unique in the file. Prefer many small edits over full rewrites; use write_file for new files or complete rewrites.
+3. EDIT precisely: edit_file requires old_string copied EXACTLY from the file (whitespace included), prefer many small edits over full rewrites; use write_file for new files or complete rewrites.
 4. VERIFY after changes: re-read edited regions or grep them; fix anything wrong before reporting done.
 5. GIT: status → push with a clean conventional commit message when asked. Never force anything; report errors honestly.
 6. FINISH with a tight summary: files changed, what you verified, next steps if any.
@@ -191,8 +202,47 @@ Style: concise, practical, plain text. Use ``` fences for any code you show.
     }
 
     // ---------------- terminal ----------------
-    private val _termLines = MutableStateFlow(listOf("SemCode terminal ready — toybox sh"))
+    private val _termLines = MutableStateFlow(listOf(""))
     val termLines: StateFlow<List<String>> = _termLines
+
+    private val _termMode = MutableStateFlow("android")
+    val termMode: StateFlow<String> = _termMode
+
+    init {
+        appendTerm(
+            "SemCode terminal ready — Android toybox sh.\n" +
+                "Type help for commands. Install a full Linux env in Settings for apt/git/python."
+        )
+    }
+
+    fun linuxInstalled(): Boolean = getApplication<SemApp>().linuxEnv.isInstalled()
+
+    fun linuxLabel(): String = getApplication<SemApp>().linuxEnv.installedLabel()
+
+    fun termCwd(): String = runCatching { activeShell().cwd }.getOrDefault(fileOps.root.path)
+
+    /** Switch terminal (and the AI's run_command) between the Android shell and proot Linux. */
+    fun termUseMode(mode: String) {
+        if (mode == _termMode.value) return
+        val app = getApplication<SemApp>()
+        if (mode == "linux" && !app.linuxEnv.isInstalled()) {
+            appendTerm("Linux not installed yet — go to Settings → Linux environment → Install.")
+            return
+        }
+        _termMode.value = mode
+        _termLines.value = emptyList()
+        appendTerm(
+            if (mode == "linux")
+                "Linux (${app.linuxEnv.installedLabel()}) via proot — real apt/apk, git, python3." +
+                    "\n/workspace = your SemCode workspace. Type help for tips."
+            else
+                "Android toybox sh. Type help for commands."
+        )
+    }
+
+    private fun activeShell(): com.danielsem65.semcodeai.core.ShellSession =
+        if (_termMode.value == "linux") getApplication<SemApp>().linuxShell()
+        else shell
 
     fun termRun(commandRaw: String) {
         val command = commandRaw.trim()
@@ -209,7 +259,7 @@ Style: concise, practical, plain text. Use ``` fences for any code you show.
         }
         viewModelScope.launch(Dispatchers.IO) {
             val out = try {
-                shell.exec(command)
+                activeShell().exec(command)
             } catch (e: Exception) {
                 "ERROR: ${e.message}"
             }
@@ -246,6 +296,7 @@ Style: concise, practical, plain text. Use ``` fences for any code you show.
         |• 'help' shows this · 'clear' wipes the screen · ⟳ icon kills a hung command
         |• The AI agent shares THIS session — its run_command output appears here,
         |  and your 'cd' persists for it too.
+        |• In LINUX mode the workspace is /workspace; apk/apt/git/python3 work.
         |• Full docs per command:  ls --help
     """.trimMargin()
 

@@ -11,7 +11,11 @@ import java.util.concurrent.atomic.AtomicLong
  * `cd`, exported vars and state survive between commands — like a real terminal.
  * A watchdog kills and restarts the session if a command overruns its timeout.
  */
-class ShellSession(startDir: File) {
+class ShellSession(
+    startDir: File,
+    private val command: List<String> = listOf("/system/bin/sh"),
+    private val envExtra: Map<String, String> = emptyMap()
+) {
 
     private var homeDir: File = startDir
 
@@ -35,16 +39,17 @@ class ShellSession(startDir: File) {
     private fun ensureStarted() {
         if (isAlive()) return
         val dir = if (homeDir.isDirectory) homeDir else File("/").also { homeDir = it }
-        dir.mkdirs()
+        runCatching { dir.mkdirs() }
 
-        val pb = ProcessBuilder("/system/bin/sh")
+        val pb = ProcessBuilder(command)
         pb.redirectErrorStream(true)
         pb.directory(dir)
         pb.environment().apply {
-            put("HOME", dir.path)
-            put("TMPDIR", File(dir, ".tmp").apply { mkdirs() }.path)
+            put("HOME", envExtra["HOME"] ?: dir.path)
+            put("TMPDIR", envExtra["TMPDIR"] ?: File(dir, ".tmp").apply { runCatching { mkdirs() } }.path)
             put("PATH", PATH_VALUE)
             put("LANG", "en_US.UTF-8")
+            putAll(envExtra)
         }
 
         val p = pb.start()

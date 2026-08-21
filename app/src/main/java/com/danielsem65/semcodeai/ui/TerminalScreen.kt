@@ -20,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -39,11 +40,12 @@ import androidx.compose.ui.platform.LocalContext
 @Composable
 fun TerminalScreen(vm: AppViewModel) {
     val lines by vm.termLines.collectAsState()
+    val mode by vm.termMode.collectAsState()
     val listState = rememberLazyListState()
     var input by remember { mutableStateOf("") }
     val context = LocalContext.current
     val app = context.applicationContext as SemApp
-    val cwd = app.session.cwd
+    var linuxOk by remember { mutableStateOf(app.linuxEnv.isInstalled()) }
 
     LaunchedEffect(lines.size) {
         if (lines.isNotEmpty()) listState.animateScrollToItem(lines.size - 1)
@@ -61,11 +63,27 @@ fun TerminalScreen(vm: AppViewModel) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "TERMINAL · ${cwd.take(40)}",
+                "${if (mode == "linux") "LINUX" else "ANDROID"} · ${vm.termCwd().take(36)}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.weight(1f)
             )
+            TextButton(onClick = { vm.termUseMode("android") }) {
+                Text("Android",
+                    fontSize = 11.sp,
+                    color = if (mode == "android") MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            TextButton(onClick = {
+                linuxOk = app.linuxEnv.isInstalled()
+                vm.termUseMode("linux")
+            }) {
+                Text(if (linuxOk) "Linux" else "Linux ⚠",
+                    fontSize = 11.sp,
+                    color = if (mode == "linux") MaterialTheme.colorScheme.primary
+                    else if (linuxOk) MaterialTheme.colorScheme.onSurfaceVariant
+                    else MaterialTheme.colorScheme.error)
+            }
             IconButton(onClick = { vm.termInterrupt() }) {
                 Icon(Icons.Filled.Refresh, contentDescription = "Reset shell",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant)

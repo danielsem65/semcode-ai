@@ -7,6 +7,7 @@ import android.os.Environment
 import android.provider.Settings
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,10 +16,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -39,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import com.danielsem65.semcodeai.AppViewModel
 import com.danielsem65.semcodeai.SemApp
 import com.danielsem65.semcodeai.ai.Providers
+import com.danielsem65.semcodeai.core.LinuxEnv
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -75,10 +80,12 @@ fun SettingsScreen(vm: AppViewModel) {
 
         StorageCard(vm)
 
+        LinuxCard(vm)
+
         GithubCard()
 
         Text(
-            "SemCode AI v2.0 · files + shell + GitHub agent · keys are stored only on this device.",
+            "SemCode AI v2.1 · files + shell + Linux + GitHub agent · keys are stored only on this device.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 16.dp, bottom = 24.dp)
@@ -380,6 +387,117 @@ private fun GithubCard() {
                     color = if (state.startsWith("✗")) MaterialTheme.colorScheme.error
                     else MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(start = 10.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LinuxCard(vm: AppViewModel) {
+    val context = LocalContext.current
+    val app = context.applicationContext as SemApp
+    val scope = rememberCoroutineScope()
+    val main = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
+
+    var installed by remember { mutableStateOf(app.linuxEnv.installedLabel()) }
+    var selected by remember { mutableStateOf(LinuxEnv.Distro.ALPINE) }
+    var busy by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf(0) }
+    var msg by remember { mutableStateOf("") }
+
+    Card(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp)
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text("Linux environment", style = MaterialTheme.typography.titleMedium)
+            Text(
+                if (installed.isNotBlank()) "Installed: $installed — real apt/apk, git, python3 in the terminal and for the AI."
+                else "Optional. Adds a full Linux distro (via proot, no root): apt/apk packages, git, python3. The AI can use it too.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+
+            if (installed.isBlank()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 10.dp)
+                ) {
+                    for (d in LinuxEnv.Distro.values()) {
+                        Button(
+                            onClick = { selected = d },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (selected == d) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.surfaceContainerHigh
+                            ),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(end = 8.dp)
+                        ) {
+                            Text("${d.label} (${d.sizeHint})",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (selected == d) MaterialTheme.colorScheme.onPrimary
+                                else MaterialTheme.colorScheme.onSurface)
+                        }
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 10.dp)) {
+                    Button(onClick = {
+                        busy = true; msg = "downloading…"; progress = 0
+                        scope.launch {
+                            try {
+                                app.linuxEnv.install(selected) { pct -> main.post { progress = pct } }
+                                installed = app.linuxEnv.installedLabel()
+                                msg = "✓ $installed ready — open the Shell tab and tap Linux"
+                            } catch (e: Exception) {
+                                msg = "✗ ${e.message?.take(160)}"
+                            }
+                            busy = false
+                        }
+                    }, enabled = !busy) { Text("Install") }
+                    if (busy) {
+                        Text("$progress%",
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(start = 10.dp))
+                        LinearProgressIndicator(
+                            progress = { progress / 100f },
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(start = 8.dp)
+                        )
+                    }
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 10.dp)) {
+                    OutlinedButton(onClick = {
+                        busy = true; msg = ""
+                        scope.launch {
+                            runCatching {
+                                app.invalidateLinuxSession()
+                                app.linuxEnv.remove()
+                            }
+                            installed = ""
+                            vm.refreshStatus()
+                            busy = false
+                        }
+                    }, enabled = !busy) { Text("Remove") }
+                    Text("Shell tab → Linux to switch into it.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 10.dp))
+                }
+            }
+            if (msg.isNotBlank()) {
+                Text(
+                    msg,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (msg.startsWith("✗")) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 8.dp)
                 )
             }
         }

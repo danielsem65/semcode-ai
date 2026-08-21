@@ -21,6 +21,10 @@ models) and a live model picker fetched straight from the provider's `/models`.
   wildcard find / copy / move / delete / info
 - **Shell**: persistent toybox session shared between you and the AI — it sees
   your `cd`, you see its commands. Watchdog kills hung sessions automatically.
+- **Linux mode (v2.1)**: optional full distro (Alpine / Ubuntu) via proot,
+  no root needed — real `apt`/`apk`, `git`, `python3`. Install in Settings;
+  switch with the Android/Linux toggle in the Shell tab. The workspace is
+  mounted at `/workspace` inside Linux.
 - **GitHub** (pure REST — no JGit): clone via zipball, snapshot-push real
   commits, pull, status, create repo. Token with repo scope in Settings.
 
