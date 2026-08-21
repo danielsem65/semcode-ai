@@ -53,4 +53,21 @@ object Notify {
             .build()
         runCatching { NotificationManagerCompat.from(context).notify(id, n) }
     }
+
+    /** Ongoing notification shown by the foreground service while the agent works. */
+    fun working(context: Context): android.app.Notification {
+        ensureChannel(context)
+        val pi = PendingIntent.getActivity(
+            context, 0,
+            Intent(context, MainActivity::class.java).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        return NotificationCompat.Builder(context, CHANNEL)
+            .setSmallIcon(android.R.drawable.stat_notify_chat)
+            .setContentTitle("SemCode AI is working…")
+            .setContentText("Agent run in progress — you'll be notified when it finishes.")
+            .setOngoing(true)
+            .setContentIntent(pi)
+            .build()
+    }
 }

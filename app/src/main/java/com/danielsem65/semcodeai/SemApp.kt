@@ -1,18 +1,51 @@
 package com.danielsem65.semcodeai
 
 import android.app.Application
+import android.content.Intent
 import com.danielsem65.semcodeai.core.LinuxEnv
 import com.danielsem65.semcodeai.core.ProjectStore
 import com.danielsem65.semcodeai.core.SettingsStore
 import com.danielsem65.semcodeai.core.ShellSession
 import com.danielsem65.semcodeai.core.Workspace
 import com.danielsem65.semcodeai.fs.FileOps
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import java.io.File
 
 class SemApp : Application() {
 
     lateinit var settings: SettingsStore
         private set
+
+    /**
+     * Application-scoped scope for agent runs. Runs launched here survive
+     * Activity/ViewModel destruction and, with the foreground service active,
+     * keep the process alive in deep background.
+     */
+    val runScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val runLock = Any()
+    private var activeRuns = 0
+
+    fun runStarted() {
+        synchronized(runLock) {
+            activeRuns++
+            if (activeRuns == 1) {
+                startForegroundService(Intent(this, com.danielsem65.semcodeai.core.AgentService::class.java))
+            }
+        }
+    }
+
+    fun runEnded() {
+        synchronized(runLock) {
+            if (activeRuns > 0) activeRuns--
+            if (activeRuns == 0) {
+                stopService(Intent(this, com.danielsem65.semcodeai.core.AgentService::class.java))
+            }
+        }
+    }
+
 
     val fileOps: FileOps by lazy { FileOps { Workspace.root(this, settings) } }
 

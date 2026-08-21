@@ -168,7 +168,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _busy.value = true
         _stepText.value = "thinking…"
 
-        viewModelScope.launch(Dispatchers.IO) {
+        // Launch on the application-scoped scope so the run survives
+        // Activity/ViewModel destruction; the foreground service keeps the
+        // process alive while it works.
+        val appCtx = getApplication<SemApp>()
+        appCtx.runStarted()
+        appCtx.runScope.launch {
             var failed = false
             try {
                 runAgent(provider, key, model)
@@ -183,7 +188,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 activeEngine = null
 
                 // Notify when the user isn't looking at the app
-                val appCtx = getApplication<SemApp>()
                 if (!com.danielsem65.semcodeai.core.AppForeground.foreground) {
                     com.danielsem65.semcodeai.core.Notify.post(
                         appCtx,
@@ -192,6 +196,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         "${currentProjectName()}: ${if (failed) "the run ended with an error" else "the agent is done, open the app to review"}"
                     )
                 }
+                appCtx.runEnded()
             }
         }
     }
