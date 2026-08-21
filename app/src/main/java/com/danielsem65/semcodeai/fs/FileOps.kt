@@ -34,6 +34,13 @@ object FileOps {
                 args.getString("path"),
                 args.optString("content", "")
             )
+            "edit_file" -> editFile(
+                args.getString("path"),
+                args.getString("old_string"),
+                args.optString("new_string", ""),
+                args.optBoolean("replace_all", false)
+            )
+            "search_in_files" -> searchInFiles(args.getString("directory"), args.getString("query"))
             "create_folder" -> createFolder(args.getString("path"))
             "delete_path" -> deletePath(args.getString("path"))
             "copy_path" -> copyPath(args.getString("source"), args.getString("destination"))
@@ -77,6 +84,56 @@ object FileOps {
         f.parentFile?.let { if (!it.exists()) it.mkdirs() }
         f.writeText(content)
         return "OK: wrote ${humanSize(content.toByteArray().size.toLong())} to ${f.path}"
+    }
+
+    fun editFile(pathInput: String, oldString: String, newString: String, replaceAll: Boolean): String {
+        val f = resolve(pathInput)
+        if (!f.exists() || !f.isFile) return "ERROR: not found: ${f.path}"
+        if (oldString.isEmpty()) return "ERROR: old_string is empty"
+        val text = f.readText()
+        val occurrences = text.split(oldString).size - 1
+        if (occurrences == 0) return "ERROR: old_string not found in ${f.name}. Read the file again and copy the text exactly."
+        if (occurrences > 1 && !replaceAll)
+            return "ERROR: old_string appears $occurrences times. Include more surrounding lines to make it unique, or set replace_all=true."
+        val updated = if (replaceAll) text.replace(oldString, newString) else text.replaceFirst(oldString, newString)
+        f.writeText(updated)
+        return "OK: edited ${f.name} ($occurrences occurrence${if (occurrences == 1) "" else "s"} replaced)"
+    }
+
+    private val binaryExtensions = setOf(
+        "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "apk", "aab", "jar", "zip",
+        "tar", "gz", "7z", "rar", "pdf", "mp3", "mp4", "avi", "mov", "so", "bin",
+        "dex", "odex", "ttf", "otf", "woff", "woff2"
+    )
+
+    fun searchInFiles(dirInput: String, query: String): String {
+        val root = resolve(dirInput)
+        if (!root.exists() || !root.isDirectory) return "ERROR: invalid directory: ${root.path}"
+        if (query.isEmpty()) return "ERROR: empty query"
+        val results = mutableListOf<String>()
+        grepRecursive(root, query, results, depth = 0)
+        return if (results.isEmpty()) "(no matches)" else results.joinToString("\n")
+    }
+
+    private fun grepRecursive(dir: File, query: String, out: MutableList<String>, depth: Int) {
+        if (depth > 10 || out.size >= 100) return
+        dir.listFiles()?.forEach { f ->
+            if (out.size >= 100) return
+            if (f.isDirectory) {
+                if (!f.name.startsWith(".")) grepRecursive(f, query, out, depth + 1)
+            } else {
+                val ext = f.extension.lowercase()
+                if (ext in binaryExtensions || f.length() > 1_000_000) return@forEach
+                val text = runCatching { f.readText() }.getOrNull() ?: return@forEach
+                if (text.contains('\u0000')) return@forEach
+                for ((i, line) in text.lines().withIndex()) {
+                    if (line.contains(query, ignoreCase = true)) {
+                        out += "${f.path}:${i + 1}: ${line.trim().take(160)}"
+                        if (out.size >= 100) break
+                    }
+                }
+            }
+        }
     }
 
     fun createFolder(pathInput: String): String {

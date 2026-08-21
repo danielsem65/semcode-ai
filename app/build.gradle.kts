@@ -12,8 +12,8 @@ android {
         applicationId = "com.danielsem65.semcodeai"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     buildTypes {
@@ -37,7 +37,14 @@ android {
     }
     packaging {
         resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += setOf(
+                "/META-INF/{AL2.0,LGPL2.1}",
+                "/META-INF/DEPENDENCIES",
+                "/META-INF/LICENSE.md",
+                "/META-INF/LICENSE-notice.md",
+                "/META-INF/INDEX.LIST",
+                "/META-INF/versions/**"
+            )
         }
     }
 }
@@ -54,4 +61,6 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("org.eclipse.jgit:org.eclipse.jgit:6.10.0.202406032554-r")
+    implementation("org.slf4j:slf4j-android:1.7.36")
 }

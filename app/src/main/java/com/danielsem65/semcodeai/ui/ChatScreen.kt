@@ -45,6 +45,7 @@ import com.danielsem65.semcodeai.ChatMessage
 fun ChatScreen(vm: AppViewModel) {
     val messages by vm.messages.collectAsState()
     val busy by vm.busy.collectAsState()
+    val statusLine by vm.statusLine.collectAsState()
     var input by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
@@ -60,11 +61,18 @@ fun ChatScreen(vm: AppViewModel) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("SemCode AI", style = MaterialTheme.typography.titleLarge)
+            Column {
+                Text("SemCode AI", style = MaterialTheme.typography.titleLarge)
+                Text(
+                    statusLine,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
             IconButton(onClick = { vm.clearChat() }) {
                 Icon(Icons.Filled.Delete, contentDescription = "Clear chat")
             }
@@ -81,7 +89,7 @@ fun ChatScreen(vm: AppViewModel) {
             if (messages.isEmpty()) {
                 item {
                     Text(
-                        "Ask me to manage your files.\n\nExamples:\n• \"List everything in Download\"\n• \"Find all .apk files and delete the ones older than 2024\"\n• \"Create a folder Backup and copy my DCIM photos into it\"\n• \"Read notes.txt and rewrite it in bullet points\"",
+                        "Your on-device coding agent.\n\nExamples:\n• \"Clone github.com/me/app into semcode/app and explain its structure\"\n• \"Build a Python-style CLI in Kotlin that renames files by date\"\n• \"Find every TODO in my project and list them\"\n• \"Fix the bug in Main.kt, commit and push it\"\n\nYou can also open the terminal (⌥ button) and run commands yourself.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(8.dp)
