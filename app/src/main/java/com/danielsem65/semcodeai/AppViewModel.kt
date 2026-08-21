@@ -198,6 +198,15 @@ Style: concise, practical, plain text. Use ``` fences for any code you show.
         val command = commandRaw.trim()
         if (command.isEmpty()) return
         appendTerm("$ $command")
+        val lower = command.lowercase()
+        if (lower == "help" || lower == "?") {
+            appendTerm(TERMINAL_HELP)
+            return
+        }
+        if (lower == "clear" || lower == "cls") {
+            _termLines.value = emptyList()
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             val out = try {
                 shell.exec(command)
@@ -220,6 +229,25 @@ Style: concise, practical, plain text. Use ``` fences for any code you show.
     private fun appendTerm(text: String) {
         _termLines.value = (_termLines.value + text.split('\n')).takeLast(1500)
     }
+
+    private val TERMINAL_HELP = """
+        |This is Android's built-in shell (mksh + toybox) — a real but minimal
+        |UNIX shell. No bash, no apt/pkg manager, no python/node.
+        |
+        |FILES     ls  cd  pwd  cat  echo  mkdir  rm  cp  mv  touch  ln  stat
+        |          chmod  find  du  df
+        |TEXT      grep  sed  awk  head  tail  wc  sort  uniq  tr  cut  xargs
+        |ARCHIVE   tar  gzip  gunzip  zip  unzip  base64  md5sum  sha256sum
+        |NETWORK   ping  curl  netstat  nslookup   e.g: curl -s https://api.ipify.org
+        |SYSTEM    ps  top  uptime  uname -a  getprop  logcat  date  id  whoami
+        |ANDROID   am start / pm list packages / dumpsys battery / settings get secure
+        |
+        |TIPS
+        |• 'help' shows this · 'clear' wipes the screen · ⟳ icon kills a hung command
+        |• The AI agent shares THIS session — its run_command output appears here,
+        |  and your 'cd' persists for it too.
+        |• Full docs per command:  ls --help
+    """.trimMargin()
 
     // ---------------- helpers ----------------
     private fun emitModel(text: String, isError: Boolean = false) {
