@@ -2,75 +2,82 @@ package com.danielsem65.semcodeai.ai
 
 import org.json.JSONObject
 
+/** Neutral conversation message used by every engine. */
 sealed class Msg {
     data class User(val text: String) : Msg()
     data class AssistantText(val text: String) : Msg()
-    data class ToolCallMsg(val id: String, val name: String, val argsJson: String) : Msg()
-    data class ToolResultMsg(val id: String, val name: String, val result: String) : Msg()
+    data class ToolUse(val id: String, val name: String, val argsJson: String) : Msg()
+    data class ToolResult(val id: String, val name: String, val result: String) : Msg()
 }
 
 class ToolCall(val id: String, val name: String, val argsJson: String)
 
-class EngineReply(
-    val text: String?,
-    val calls: List<ToolCall>
-)
+class EngineReply(val text: String?, val calls: List<ToolCall>)
 
 class ToolDef(val name: String, val description: String, val parameters: JSONObject) {
     companion object {
-        fun obj(vararg props: Pair<String, String>, required: List<String> = emptyList()): JSONObject {
+        const val STRING = "string"
+        const val NUMBER = "number"
+        const val BOOLEAN = "boolean"
+
+        fun schema(vararg props: Pair<String, String>, required: List<String> = emptyList()): JSONObject {
             val properties = JSONObject()
-            props.forEach { (pname, ptype) -> properties.put(pname, JSONObject().put("type", ptype)) }
-            return JSONObject().put("type", "object").put("properties", properties)
+            for ((pname, ptype) in props) properties.put(pname, JSONObject().put("type", ptype))
+            return JSONObject()
+                .put("type", "object")
+                .put("properties", properties)
                 .put("required", org.json.JSONArray(required))
         }
-        val STRING = "string"; val BOOLEAN = "boolean"; val NUMBER = "number"
     }
 }
 
 interface AiEngine {
+    /** One request/response round. Blocking; call from a background dispatcher. */
     fun chat(system: String, history: List<Msg>, tools: List<ToolDef>): EngineReply
-}
 
-enum class EngineKind { GEMINI, OPENAI_COMPAT, ANTHROPIC }
+    /** Lists available model IDs; doubles as a key tester. */
+    fun listModels(): List<String>
+}
 
 data class Provider(
     val id: String,
     val displayName: String,
-    val kind: EngineKind,
     val baseUrl: String,
     val defaultModel: String,
     val keyUrl: String,
-    val note: String
+    val note: String,
+    val isLocal: Boolean = false
 )
 
 object Providers {
+
     val ALL = listOf(
-        Provider("gemini", "Gemini (free tier)", EngineKind.GEMINI,
-            "https://generativelanguage.googleapis.com/v1beta", "gemini-3.6-flash",
-            "https://aistudio.google.com/apikey", "Free API key from Google AI Studio"),
-        Provider("zen", "OpenCode Zen (free models)", EngineKind.OPENAI_COMPAT,
-            "https://opencode.ai/zen/v1", "big-pickle",
-            "https://opencode.ai/auth", "big-pickle & friends are FREE"),
-        Provider("openrouter", "OpenRouter (free models)", EngineKind.OPENAI_COMPAT,
-            "https://openrouter.ai/api/v1", "openrouter/free",
-            "https://openrouter.ai/keys", "'openrouter/free' or any model + ':free' = $0"),
-        Provider("groq", "Groq (free tier)", EngineKind.OPENAI_COMPAT,
-            "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile",
-            "https://console.groq.com/keys", "Fast, free tier"),
-        Provider("deepseek", "DeepSeek", EngineKind.OPENAI_COMPAT,
-            "https://api.deepseek.com/v1", "deepseek-chat",
-            "https://platform.deepseek.com", "Paid, very cheap"),
-        Provider("anthropic", "Anthropic Claude", EngineKind.ANTHROPIC,
-            "https://api.anthropic.com/v1", "claude-sonnet-4-5",
-            "https://console.anthropic.com", "Paid; excellent coder")
+        Provider(
+            "zen", "OpenCode Zen",
+            "https://opencode.ai/zen/v1",
+            "big-pickle",
+            "https://opencode.ai/auth",
+            "FREE coding models — big-pickle, x-preview-f-free, mimo & more. Key from opencode.ai/auth."
+        ),
+        Provider(
+            "openrouter", "OpenRouter",
+            "https://openrouter.ai/api/v1",
+            "openrouter/free",
+            "https://openrouter.ai/keys",
+            "'openrouter/free' routes to any free model; append ':free' to specific models for $0."
+        ),
+        Provider(
+            "ollama", "Ollama (local)",
+            "http://127.0.0.1:11434/v1",
+            "",
+            "https://ollama.com",
+            "Offline models (gemma3, qwen3…) via Ollama on-device (Termux) or adb reverse. No key needed.",
+            isLocal = true
+        )
     )
 
     fun byId(id: String): Provider = ALL.firstOrNull { it.id == id } ?: ALL.first()
 
-    fun create(provider: Provider, apiKey: String, model: String): AiEngine = when (provider.kind) {
-        EngineKind.GEMINI -> GeminiEngine(apiKey, model)
-        EngineKind.OPENAI_COMPAT -> OpenAiCompatEngine(provider.baseUrl, apiKey, model)
-        EngineKind.ANTHROPIC -> AnthropicEngine(provider.baseUrl, apiKey, model)
-    }
+    fun create(provider: Provider, apiKey: String, model: String): AiEngine =
+        OpenAiCompatEngine(provider.baseUrl, apiKey.ifBlank { "none" }, model, isLocal = provider.isLocal)
 }

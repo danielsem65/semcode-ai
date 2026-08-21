@@ -7,37 +7,38 @@ import com.danielsem65.semcodeai.ai.EngineReply
 import com.danielsem65.semcodeai.ai.Msg
 import com.danielsem65.semcodeai.ai.Provider
 import com.danielsem65.semcodeai.ai.Providers
-import com.danielsem65.semcodeai.ai.ToolCall
-import com.danielsem65.semcodeai.ai.ToolDef
-import com.danielsem65.semcodeai.data.SettingsStore
-import com.danielsem65.semcodeai.fs.FileOps
-import com.danielsem65.semcodeai.git.GitOps
+import com.danielsem65.semcodeai.github.GitHubSync
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 data class ChatMessage(
     val role: Role,
     val text: String,
-    val isTool: Boolean = false
+    val isTool: Boolean = false,
+    val isError: Boolean = false
 ) {
     enum class Role { USER, MODEL }
 }
 
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
-    val settings = SettingsStore(app)
-    private val session get() = getApplication<SemApp>().session
-    private val workspace get() = getApplication<SemApp>().workspace
+    private val settings get() = getApplication<SemApp>().settings
+    private val fileOps get() = getApplication<SemApp>().fileOps
+    private val shell get() = getApplication<SemApp>().session
 
-    // ---------- chat ----------
+    // ---------------- chat ----------------
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages
 
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy
+
+    private val _stepText = MutableStateFlow("")
+    val stepText: StateFlow<String> = _stepText
 
     private val _statusLine = MutableStateFlow("")
     val statusLine: StateFlow<String> = _statusLine
@@ -53,195 +54,194 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun refreshStatus() {
         val p = activeProvider()
-        val hasKey = settings.hasKeyFor(p.id)
-        _statusLine.value = "${p.displayName} · ${effectiveModel(p)}" + if (!hasKey) " · no key!" else ""
+        val keyOk = p.isLocal || settings.hasKeyFor(p.id)
+        _statusLine.value =
+            "${p.displayName} · ${effectiveModel(p)}" + if (!keyOk) "  ⚠ no key" else ""
     }
 
     fun clearChat() {
         _messages.value = emptyList()
         apiHistory.clear()
+        _stepText.value = ""
     }
 
-    fun send(userText: String) {
-        val text = userText.trim()
-        if (text.isEmpty() || _busy.value) return
+    fun send(userTextRaw: String) {
+        val userText = userTextRaw.trim()
+        if (userText.isEmpty() || _busy.value) return
 
         val provider = activeProvider()
+        val model = effectiveModel(provider)
         val key = settings.apiKey(provider.id)
-        if (key.isEmpty()) {
+        if (!provider.isLocal && key.isBlank()) {
             _messages.value += ChatMessage(
                 ChatMessage.Role.MODEL,
-                "No API key saved for ${provider.displayName}. Open Settings, pick the provider and paste a key.\n(${provider.keyUrl})"
+                "**No API key for ${provider.displayName}.**\n\nOpen Settings → pick ${provider.displayName} → paste your key from ${provider.keyUrl}.\nTip: use the Test button there to verify it instantly.",
+                isError = true
             )
             return
         }
 
-        _messages.value += ChatMessage(ChatMessage.Role.USER, text)
-        apiHistory += Msg.User(text)
+        _messages.value += ChatMessage(ChatMessage.Role.USER, userText)
+        apiHistory += Msg.User(userText)
         _busy.value = true
+        _stepText.value = "thinking…"
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                runAgent(provider, key, text)
+                runAgent(provider, key, model)
             } catch (e: Exception) {
-                emitModel("Error: ${e.message ?: "unknown failure"}")
+                emitModel("Error: ${e.message ?: "request failed"}", isError = true)
             } finally {
                 _busy.value = false
+                _stepText.value = ""
             }
         }
     }
 
-    private suspend fun runAgent(provider: Provider, key: String, @Suppress("UNUSED_PARAMETER") lastText: String) {
-        val engine = Providers.create(provider, key, effectiveModel(provider))
+    private suspend fun runAgent(provider: Provider, apiKey: String, model: String) {
+        val engine = Providers.create(provider, apiKey, model)
         var steps = 0
+
         while (steps < MAX_STEPS) {
             steps++
-            val reply: EngineReply = engine.chat(systemPrompt(), apiHistory.toList(), buildTools())
+            _stepText.value = "step $steps/$MAX_STEPS"
 
-            val calls = reply.calls
-            if (calls.isEmpty()) {
+            val reply: EngineReply = withContext(Dispatchers.IO) {
+                engine.chat(systemPrompt(), apiHistory.toList(), com.danielsem65.semcodeai.ai.Tools.all())
+            }
+
+            if (reply.calls.isEmpty()) {
                 emitModel(reply.text ?: "(no answer)")
                 return
             }
             if (!reply.text.isNullOrBlank()) emitModel(reply.text)
 
-            for (call in calls) {
-                apiHistory += Msg.ToolCallMsg(call.id, call.name, call.argsJson)
-                emitTool("${call.name}(${shortArgs(call.argsJson)})")
+            for (call in reply.calls) {
+                apiHistory += Msg.ToolUse(call.id, call.name, call.argsJson)
+                emitTool("${call.name} ${shortArgs(call.argsJson)}")
+                _stepText.value = "step $steps/$MAX_STEPS · ${call.name}"
                 val result = dispatch(call.name, call.argsJson)
                 emitResult(shorten(result))
-                apiHistory += Msg.ToolResultMsg(call.id, call.name, result.take(20_000))
+                apiHistory += Msg.ToolResult(call.id, call.name, result.take(20_000))
             }
         }
-        emitModel("(stopped after $MAX_STEPS tool rounds — ask me to continue)")
+        emitModel("Reached the $MAX_STEPS-step limit — say \"continue\" and I'll keep going.")
     }
 
-    private fun dispatch(name: String, argsJson: String): String {
+    private suspend fun dispatch(name: String, argsJson: String): String {
         val args = runCatching { JSONObject(argsJson) }.getOrDefault(JSONObject())
-        return try {
-            when {
-                name == "run_command" -> session.exec(
-                    args.optString("command", ""),
-                    args.optLong("timeout_seconds", 45).coerceIn(1, 300)
-                )
-                name.startsWith("git_") -> GitOps.execute(
-                    name, args,
-                    settings.gitUser.ifBlank { null },
-                    settings.gitToken.ifBlank { null }
-                )
-                else -> FileOps.execute(name, args)
+        return withContext(Dispatchers.IO) {
+            try {
+                when (name) {
+                    "run_command" -> shell.exec(
+                        args.optString("command", ""),
+                        args.optLong("timeout_seconds", 30).coerceIn(1, 600)
+                    )
+                    name.startsWith("github_") -> githubDispatch(name, args)
+                    else -> fileOps.execute(name, args)
+                }
+            } catch (e: Exception) {
+                "ERROR: ${e.message}"
             }
-        } catch (e: Exception) {
-            "ERROR: ${e.message}"
         }
     }
 
-    // ---------- terminal ----------
-    private val _termLines = MutableStateFlow(listOf("-- SemCode terminal — toybox sh --"))
+    private suspend fun githubDispatch(name: String, args: JSONObject): String =
+        withContext(Dispatchers.IO) {
+            val token = settings.githubToken
+            when (name) {
+                "github_clone" -> GitHubSync.clone(fileOps, token, args.optString("repo"), args.optString("path"))
+                "github_status" -> GitHubSync.status(fileOps, token, args.getString("path"))
+                "github_push" -> GitHubSync.push(
+                    fileOps, token, args.getString("path"),
+                    args.optString("message", "Update from SemCode AI").ifBlank { "Update from SemCode AI" }
+                )
+                "github_pull" -> GitHubSync.pull(fileOps, token, args.getString("path"))
+                "github_create_repo" -> GitHubSync.createRepo(token, args.getString("name"), args.optBoolean("private", false))
+                else -> "ERROR: unknown $name"
+            }
+        }
+
+    private fun systemPrompt(): String {
+        val root = fileOps.root.path
+        val fullMode = settings.fullStorage
+        return """
+You are SemCode AI — a professional software engineering agent running on the user's Android phone. You plan before acting, write production-quality code, verify your own changes, and never fabricate results.
+
+Environment:
+- Workspace root: $root — all relative paths resolve against it. Create each project in its own subfolder.
+- Storage mode: ${if (fullMode) "FULL device storage enabled" else "app-private workspace (user can enable full storage in Settings)"}. Absolute paths outside the workspace may fail unless full storage is on.
+- Shell: Android toybox/mksh via run_command. Available: ls cat cp mv rm mkdir grep sed awk find tar gzip curl sh. NOT available: apt/sudo/git binaries/python/node/javac. Never pretend a missing toolchain ran; use the dedicated github_* tools for all git operations.
+
+Working method:
+1. PLAN briefly, then act. Batch independent tool calls.
+2. INSPECT first: list_files/read_file/search_in_files so edits match reality.
+3. EDIT precisely: edit_file requires old_string copied EXACTLY from the file (whitespace included), unique in the file. Prefer many small edits over full rewrites; use write_file for new files or complete rewrites.
+4. VERIFY after changes: re-read edited regions or grep them; fix anything wrong before reporting done.
+5. GIT: status → push with a clean conventional commit message when asked. Never force anything; report errors honestly.
+6. FINISH with a tight summary: files changed, what you verified, next steps if any.
+
+Style: concise, practical, plain text. Use ``` fences for any code you show.
+""".trimIndent()
+    }
+
+    // ---------------- terminal ----------------
+    private val _termLines = MutableStateFlow(listOf("SemCode terminal ready — toybox sh"))
     val termLines: StateFlow<List<String>> = _termLines
 
-    private val _termOpen = MutableStateFlow(false)
-    val termOpen: StateFlow<Boolean> = _termOpen
-
-    fun toggleTerm() { _termOpen.value = !_termOpen.value }
-    fun closeTerm() { _termOpen.value = false }
-    fun clearTerm() { _termLines.value = emptyList() }
-
-    fun termRun(command: String) {
-        val cmd = command.trim()
-        if (cmd.isEmpty()) return
-        appendTerm("$ $cmd")
+    fun termRun(commandRaw: String) {
+        val command = commandRaw.trim()
+        if (command.isEmpty()) return
+        appendTerm("$ $command")
         viewModelScope.launch(Dispatchers.IO) {
-            val out = try { session.exec(cmd) } catch (e: Exception) { "ERROR: ${e.message}" }
+            val out = try {
+                shell.exec(command)
+            } catch (e: Exception) {
+                "ERROR: ${e.message}"
+            }
             appendTerm(out)
         }
     }
 
     fun termInterrupt() {
         viewModelScope.launch(Dispatchers.IO) {
-            session.interrupt()
-            appendTerm("^C — session killed, fresh shell next command")
+            shell.interrupt()
+            appendTerm("^C — session reset")
         }
     }
+
+    fun termClear() { _termLines.value = emptyList() }
 
     private fun appendTerm(text: String) {
         _termLines.value = (_termLines.value + text.split('\n')).takeLast(1500)
     }
 
-    // ---------- AI plumbing ----------
-    private fun systemPrompt(): String {
-        val base = FileOps.baseDir.absolutePath.trimEnd('/')
-        val ws = workspace.path.trimEnd('/')
-        return """
-You are SemCode AI, an expert software engineering agent running fully on the user's Android phone. You can reason deeply, plan multi-step work, write and refactor code across many files, run commands in the device's real Unix shell, and operate git repositories. Work autonomously and thoroughly until the task is complete.
-
-Environment:
-- Workspace for projects: $ws (create project folders here unless told otherwise).
-- Shared storage root: $base - all paths resolve relative to it unless absolute.
-- Shell is Android toybox/mksh: ls, cat, cp, mv, rm, grep, sed, awk, find, tar, gzip, curl exist. There is NO apt/sudo, and NO python/node/javac by default. Never pretend unavailable toolchains ran.
-- Git works through dedicated git_* tools over HTTPS. Pushing requires the user's saved GitHub username + token (Settings); if missing, tell them where to add it.
-
-Method (think before you act):
-1. Plan briefly: which files to inspect, change, create, or run.
-2. Inspect before editing: list_files/read_file/search_in_files so edits match reality.
-3. Make precise edits: edit_file needs an EXACT unique old_string (copy whitespace exactly; include surrounding lines to disambiguate) - or rewrite whole files with write_file.
-4. Verify: re-read changed sections or run_command checks (e.g. grep your change). Fix anything broken before finishing.
-5. Git workflow when asked: git_status -> git_stage -> git_commit (clear conventional message) -> git_push only if requested. NEVER force-push.
-6. Finish with a short summary: what changed (paths), what you verified, and any follow-ups.
-
-Rules: be honest about failures and fix them; never invent file contents or output; batch independent operations in one turn; keep replies tight.
-""".trimIndent()
-    }
-
-    private fun buildTools(): List<ToolDef> {
-        val S = ToolDef.STRING; val B = ToolDef.BOOLEAN; val N = ToolDef.NUMBER
-        fun td(name: String, desc: String, vararg props: Pair<String, String>, required: List<String>) =
-            ToolDef(name, desc, ToolDef.obj(*props, required = required))
-
-        return listOf(
-            td("list_files", "List a directory's entries.", "path" to S, required = listOf("path")),
-            td("read_file", "Read a full text file (up to ~500KB).", "path" to S, required = listOf("path")),
-            td("write_file", "Create or completely overwrite a text file.", "path" to S, "content" to S, required = listOf("path", "content")),
-            td("edit_file", "Replace exact text inside a file. old_string must be unique unless replace_all.",
-                "path" to S, "old_string" to S, "new_string" to S, "replace_all" to B, required = listOf("path", "old_string", "new_string")),
-            td("search_in_files", "Grep-like content search (file:line:match), skips binaries/.git.",
-                "directory" to S, "query" to S, required = listOf("directory", "query")),
-            td("search_files", "Find filenames by wildcard (* ?), case-insensitive.",
-                "directory" to S, "pattern" to S, required = listOf("directory", "pattern")),
-            td("create_folder", "Create a directory tree.", "path" to S, required = listOf("path")),
-            td("delete_path", "Permanently delete a file or folder tree.", "path" to S, required = listOf("path")),
-            td("copy_path", "Copy file/folder recursively.", "source" to S, "destination" to S, required = listOf("source", "destination")),
-            td("move_path", "Move or rename file/folder.", "source" to S, "destination" to S, required = listOf("source", "destination")),
-            td("get_file_info", "Path metadata (size, dates, permissions).", "path" to S, required = listOf("path")),
-            td("run_command", "Run one command in the persistent device shell (state survives between calls; stdin closed; default timeout 45s).",
-                "command" to S, "timeout_seconds" to N, required = listOf("command")),
-            td("git_clone", "Clone a repo over HTTPS into a folder.", "url" to S, "path" to S, required = listOf("url", "path")),
-            td("git_status", "Show branch + working tree changes.", "path" to S, required = listOf("path")),
-            td("git_stage", "Stage changes ('.' = everything incl. deletions).", "path" to S, "pattern" to S, required = listOf("path")),
-            td("git_commit", "Commit staged changes.", "path" to S, "message" to S, required = listOf("path", "message")),
-            td("git_pull", "Pull and merge from remote.", "path" to S, required = listOf("path")),
-            td("git_push", "Push commits (needs GitHub token in Settings).", "path" to S, required = listOf("path"))
-        )
-    }
-
-    private fun shortArgs(json: String): String = json.take(120)
-
-    private fun shorten(result: String): String {
-        val lines = result.split("\n")
-        return if (lines.size > 12) lines.take(12).joinToString("\n") + "\n… (+${lines.size - 12} more)"
-        else result
-    }
-
-    private fun emitModel(text: String) {
-        _messages.value += ChatMessage(ChatMessage.Role.MODEL, text)
+    // ---------------- helpers ----------------
+    private fun emitModel(text: String, isError: Boolean = false) {
+        _messages.value += ChatMessage(ChatMessage.Role.MODEL, text, isError = isError)
     }
 
     private fun emitTool(text: String) {
-        _messages.value += ChatMessage(ChatMessage.Role.MODEL, "⚙ $text", isTool = true)
+        _messages.value += ChatMessage(ChatMessage.Role.MODEL, text, isTool = true)
     }
 
     private fun emitResult(text: String) {
-        _messages.value += ChatMessage(ChatMessage.Role.MODEL, text.takeLast(400), isTool = true)
+        _messages.value += ChatMessage(ChatMessage.Role.MODEL, text.takeLast(500), isTool = true)
+    }
+
+    private fun shortArgs(json: String): String =
+        runCatching {
+            val o = JSONObject(json)
+            o.keys().asSequence().joinToString(" ") { k ->
+                val v = o.optString(k).replace('\n', ' ')
+                "$k=${v.take(48)}"
+            }
+        }.getOrDefault(json.take(60))
+
+    private fun shorten(result: String): String {
+        val lines = result.split("\n")
+        return if (lines.size > 14) lines.take(14).joinToString("\n") + "\n… (+${lines.size - 14} lines)"
+        else result
     }
 
     companion object {

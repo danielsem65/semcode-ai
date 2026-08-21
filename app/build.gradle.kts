@@ -12,8 +12,8 @@ android {
         applicationId = "com.danielsem65.semcodeai"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 10
+        versionName = "2.0"
     }
 
     buildTypes {
@@ -26,7 +26,6 @@ android {
         }
     }
     compileOptions {
-        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -38,14 +37,7 @@ android {
     }
     packaging {
         resources {
-            excludes += setOf(
-                "/META-INF/{AL2.0,LGPL2.1}",
-                "/META-INF/DEPENDENCIES",
-                "/META-INF/LICENSE.md",
-                "/META-INF/LICENSE-notice.md",
-                "/META-INF/INDEX.LIST",
-                "/META-INF/versions/**"
-            )
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
 }
@@ -62,7 +54,4 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
-    implementation("org.eclipse.jgit:org.eclipse.jgit:6.10.1.202505221210-r")
-    implementation("org.slf4j:slf4j-android:1.7.36")
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 }

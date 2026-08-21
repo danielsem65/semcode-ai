@@ -1,72 +1,48 @@
 # SemCode AI
 
-An AI coding agent that runs entirely on your Android phone — an OpenCode-style
-agent in your pocket. Chat with it to write and refactor code, run real shell
-commands, and operate git repos (clone / commit / pull / push). Includes a
-show/hide terminal and a manual file browser.
+A professional AI coding agent that lives on your Android phone — write code,
+run real shell commands, and sync projects to GitHub, all from one app.
+Built with Kotlin + Jetpack Compose; GitHub Actions builds every APK.
 
-Built with **Kotlin + Jetpack Compose**. GitHub Actions builds the APK — no
-Android Studio needed.
+## Providers (v2)
 
-## Features
+| Provider | Cost | Notes |
+|---|---|---|
+| **OpenCode Zen** | FREE models | `big-pickle` & friends — key at opencode.ai/auth |
+| **OpenRouter** | free tier | `openrouter/free` router, or any model + `:free` |
+| **Ollama (local)** | offline | gemma3 / qwen3 via Ollama on-device or `adb reverse` |
 
-- **Multi-provider AI** — pick a provider and paste your key (stored per-provider):
-  | Provider | Notes |
-  |---|---|
-  | Gemini | free tier, thinking enabled |
-  | OpenCode Zen | **free models** incl. `big-pickle` — key at opencode.ai/auth |
-  | OpenRouter | `openrouter/free` or any `model:free` = $0 |
-  | Groq | free tier |
-  | DeepSeek | cheap |
-  | Anthropic Claude | native Messages API |
-  Model override box lets you use any model ID.
-- **Agent loop** — up to 25 tool rounds per message with verification steps:
-  `list_files`, `read_file`, `write_file`, `edit_file` (exact-match replace),
-  `search_in_files` (grep), `search_files`, folder/file create/copy/move/delete,
-  `get_file_info`, `run_command`, plus git tools.
-- **Terminal** — persistent toybox shell session (`cd`, env vars survive),
-  slides up/down over any screen; the AI uses the *same* session via run_command,
-  so it sees your cwd and you see what it did.
-- **Git** — JGit under the hood: clone over HTTPS, status, stage, commit, pull,
-  push using your GitHub username + personal access token.
-- **Files tab** — manual browser with preview/edit helpers.
+Every provider row has a built-in **Test** button (verifies the key by listing
+models) and a live model picker fetched straight from the provider's `/models`.
 
-## Setup (first launch)
+## Agent capabilities
 
-1. Install the APK from the latest green **Build APK** workflow artifact.
-2. Settings → **AI Provider** → pick one → paste API key → Save key → Use provider.
-   Free path: Gemini key (aistudio.google.com/apikey) or OpenCode Zen (opencode.ai/auth).
-3. Settings → **Storage access** → grant "All files access".
-4. Optional: add GitHub username + token for push/private clones.
-5. Projects live in `/storage/emulated/0/semcode/`.
+- **Files**: read / write / exact-match edit / grep (`search_in_files`) /
+  wildcard find / copy / move / delete / info
+- **Shell**: persistent toybox session shared between you and the AI — it sees
+  your `cd`, you see its commands. Watchdog kills hung sessions automatically.
+- **GitHub** (pure REST — no JGit): clone via zipball, snapshot-push real
+  commits, pull, status, create repo. Token with repo scope in Settings.
 
-## Getting the APK
+## Zero-friction start
 
-Repo → **Actions** → latest *Build APK* run → download **SemCodeAI-debug-apk**
-→ sideload.
+The app works immediately in an app-private workspace — no permissions needed.
+Enable *Full device storage* in Settings to move the workspace to
+`/storage/emulated/0/semcode`.
 
-## Notes
+## Install
 
-- Personal-use build: uses `MANAGE_EXTERNAL_STORAGE` (not Play-Store compliant — fine, this app is just for yours truly).
-- Keys/tokens are stored in app-private SharedPreferences on-device only.
-- The device shell has no root, no apt, no python/node/javac out of the box —
-  the agent knows its limits and won't fake output.
+Repo → Actions → latest green run → artifact **SemCodeAI-debug-apk** → sideload.
 
-## Project layout
+First launch: Settings → pick provider → paste key → Test → Use this provider.
+Then ask the AI tab to build something.
+
+## Layout
 
 ```
-app/src/main/java/com/danielsem65/semcodeai/
-├── MainActivity.kt            # tabs + sliding terminal panel
-├── SemApp.kt                  # app-scoped shell session + workspace
-├── AppViewModel.kt            # agent loop, tool dispatch, terminal state
-├── ai/
-│   ├── AiCore.kt              # neutral msg model + provider catalog
-│   ├── GeminiEngine.kt        # native Gemini REST (thinking budget)
-│   ├── OpenAiCompatEngine.kt  # Zen / OpenRouter / Groq / DeepSeek / any v1
-│   └── AnthropicEngine.kt     # native Claude Messages API
-├── shell/ShellSession.kt      # persistent sh process w/ sentinel IO
-├── git/GitOps.kt              # JGit operations
-├── fs/FileOps.kt              # filesystem tools
-├── data/SettingsStore.kt      # keys, model, git creds
-└── ui/                        # Compose screens + theme
+core/    SettingsStore · Workspace · ShellSession
+ai/      AiCore (providers) · OpenAiCompatEngine · Tools
+fs/      FileOps
+github/  GitHubSync (REST)
+ui/      Chat (markdown) · Terminal · Files · Settings
 ```
