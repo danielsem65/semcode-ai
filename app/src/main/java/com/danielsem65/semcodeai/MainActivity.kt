@@ -40,11 +40,30 @@ class MainActivity : ComponentActivity() {
 
     private val vm by viewModels<AppViewModel>()
 
+    private val notifPermission =
+        registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
         setContent {
             SemCodeTheme { App(vm) }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        com.danielsem65.semcodeai.core.AppForeground.foreground = true
+    }
+
+    override fun onStop() {
+        super.onStop()
+        com.danielsem65.semcodeai.core.AppForeground.foreground = false
     }
 }
 

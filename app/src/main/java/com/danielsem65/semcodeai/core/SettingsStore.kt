@@ -33,6 +33,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(FULL_STORAGE, false)
         set(value) = prefs.edit().putBoolean(FULL_STORAGE, value).apply()
 
+    /** When true, destructive tools wait for explicit user approval in chat. */
+    var askBeforeChanges: Boolean
+        get() = prefs.getBoolean(ASK_BEFORE_CHANGES, false)
+        set(value) = prefs.edit().putBoolean(ASK_BEFORE_CHANGES, value).apply()
+
     // ----- git hub -----
     var githubToken: String
         get() = prefs.getString(GITHUB_TOKEN, "") ?: ""
@@ -43,5 +48,6 @@ class SettingsStore(context: Context) {
         const val MODEL_OVERRIDE = "model_override"
         const val FULL_STORAGE = "full_storage"
         const val GITHUB_TOKEN = "github_token"
+        const val ASK_BEFORE_CHANGES = "ask_before_changes"
     }
 }

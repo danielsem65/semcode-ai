@@ -61,6 +61,7 @@ fun ChatScreen(
     val projects by vm.projects.collectAsState()
     val activeId by vm.projectId.collectAsState()
     val liveText by vm.liveText.collectAsState()
+    val pending by vm.pendingApprovals.collectAsState()
     var input by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
 
@@ -118,7 +119,13 @@ fun ChatScreen(
             if (messages.isEmpty()) {
                 item { WelcomeCard(onOpenSettings) }
             }
-            items(messages, key = { it.hashCode() }) { msg -> Bubble(msg) }
+            items(messages, key = { it.hashCode() }) { msg ->
+                Bubble(
+                    msg,
+                    awaiting = msg.proposalId != null && pending.containsKey(msg.proposalId),
+                    onDecide = { id, ok -> vm.decideProposal(id, ok) }
+                )
+            }
             if (busy && liveText.isNotBlank()) {
                 item(key = "live") {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
@@ -220,7 +227,11 @@ private fun WelcomeCard(onOpenSettings: () -> Unit) {
 }
 
 @Composable
-private fun Bubble(msg: ChatMessage) {
+private fun Bubble(
+    msg: ChatMessage,
+    awaiting: Boolean = false,
+    onDecide: (String, Boolean) -> Unit = { _, _ -> }
+) {
     val isUser = msg.role == ChatMessage.Role.USER
     val clipboard = LocalClipboardManager.current
     var copied by remember(msg.hashCode()) { mutableStateOf(false) }
@@ -258,7 +269,30 @@ private fun Bubble(msg: ChatMessage) {
                     }
                 }
             }
-            if (!isUser && !msg.isTool && msg.text.isNotBlank()) {
+
+            // ---- approval card actions ----
+            if (msg.proposalId != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 4.dp)
+                ) {
+                    Button(
+                        onClick = { onDecide(msg.proposalId!!, true) },
+                        enabled = awaiting,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            horizontal = 18.dp, vertical = 6.dp
+                        )
+                    ) { Text(if (awaiting) "Apply" else "Applied") }
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = { onDecide(msg.proposalId!!, false) },
+                        enabled = awaiting,
+                        modifier = Modifier.padding(start = 8.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                            horizontal = 18.dp, vertical = 6.dp
+                        )
+                    ) { Text("Deny") }
+                }
+            } else if (!isUser && !msg.isTool && msg.text.isNotBlank()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
                         onClick = {

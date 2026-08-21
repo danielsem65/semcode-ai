@@ -19,7 +19,8 @@ data class ChatMessage(
     val role: Role,
     val text: String,
     val isTool: Boolean = false,
-    val isError: Boolean = false
+    val isError: Boolean = false,
+    val proposalId: String? = null
 ) {
     enum class Role { USER, MODEL }
 }
@@ -53,6 +54,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** Text arriving token-by-token for the in-flight reply. */
     private val _liveText = MutableStateFlow("")
     val liveText: StateFlow<String> = _liveText
+
+    // ---------------- approvals (ask-before-changes) ----------------
+    data class PendingApproval(
+        val id: String,
+        val tool: String,
+        val deferred: kotlinx.coroutines.CompletableDeferred<Boolean>
+    )
+
+    private val _pendingApprovals = MutableStateFlow<Map<String, PendingApproval>>(emptyMap())
+    val pendingApprovals: StateFlow<Map<String, PendingApproval>> = _pendingApprovals
+
+    fun decideProposal(id: String, approve: Boolean) {
+        _pendingApprovals.value[id]?.deferred?.complete(approve)
+    }
 
     private val apiHistory = mutableListOf<Msg>()
 
@@ -154,9 +169,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _stepText.value = "thinking…"
 
         viewModelScope.launch(Dispatchers.IO) {
+            var failed = false
             try {
                 runAgent(provider, key, model)
             } catch (e: Exception) {
+                failed = true
                 emitModel("Error: ${e.message ?: "request failed"}", isError = true)
             } finally {
                 persist()
@@ -164,6 +181,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 _stepText.value = ""
                 _liveText.value = ""
                 activeEngine = null
+
+                // Notify when the user isn't looking at the app
+                val appCtx = getApplication<SemApp>()
+                if (!com.danielsem65.semcodeai.core.AppForeground.foreground) {
+                    com.danielsem65.semcodeai.core.Notify.post(
+                        appCtx,
+                        (System.currentTimeMillis() and 0x7fffffff).toInt(),
+                        if (failed) "SemCode AI — task failed" else "SemCode AI — task finished",
+                        "${currentProjectName()}: ${if (failed) "the run ended with an error" else "the agent is done, open the app to review"}"
+                    )
+                }
             }
         }
     }
@@ -225,13 +253,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun stopGeneration() {
         stopRequested.set(true)
         activeEngine?.cancelActive()
+        _pendingApprovals.value.values.forEach { it.deferred.complete(false) }
     }
 
     private suspend fun dispatch(name: String, argsJson: String): String {
         val args = runCatching { JSONObject(argsJson) }.getOrDefault(JSONObject())
         return withContext(Dispatchers.IO) {
             try {
-                when (name) {
+                if (name in APPROVAL_TOOLS && !gateIfNeeded(name, argsJson)) {
+                    "DENIED_BY_USER — the user rejected this action. Ask what they'd prefer or continue without it."
+                } else when (name) {
                     "run_command" -> activeShell().exec(
                         args.optString("command", ""),
                         args.optLong("timeout_seconds", 30).coerceIn(1, 600)
@@ -244,6 +275,41 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 "ERROR: ${e.message}"
             }
         }
+    }
+
+    /**
+     * When "Ask before changes" is on, destructive tools pause the agent until
+     * the user approves or denies a preview card in chat.
+     */
+    private suspend fun gateIfNeeded(name: String, argsJson: String): Boolean {
+        if (!settings.askBeforeChanges || name !in APPROVAL_TOOLS) return true
+
+        val id = "ap${System.nanoTime()}"
+        val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        _pendingApprovals.value = _pendingApprovals.value + (id to PendingApproval(id, name, deferred))
+
+        val preview = runCatching { fileOps.previewDiff(name, argsJson) }
+            .getOrDefault("(preview unavailable)")
+        emitModel(
+            "**✋ Approval needed · `$name`**\n```diff\n${preview.take(2500)}\n```",
+            proposalId = id
+        )
+
+        val ok = try { deferred.await() } catch (_: Exception) { false }
+        _pendingApprovals.value = _pendingApprovals.value - id
+
+        _messages.value = _messages.value.map {
+            if (it.proposalId == id)
+                it.copy(
+                    proposalId = null,
+                    text = it.text.replaceFirst(
+                        "**✋ Approval needed",
+                        if (ok) "**✅ Approved & applied" else "**🚫 Denied"
+                    )
+                )
+            else it
+        }
+        return ok
     }
 
     private suspend fun githubDispatch(name: String, args: JSONObject): String =
@@ -456,8 +522,8 @@ Style: concise, practical, plain text. Use ``` fences for any code you show.
     """.trimMargin()
 
     // ---------------- helpers ----------------
-    private fun emitModel(text: String, isError: Boolean = false) {
-        _messages.value += ChatMessage(ChatMessage.Role.MODEL, text, isError = isError)
+    private fun emitModel(text: String, isError: Boolean = false, proposalId: String? = null) {
+        _messages.value += ChatMessage(ChatMessage.Role.MODEL, text, isError = isError, proposalId = proposalId)
     }
 
     private fun emitTool(text: String) {
@@ -487,5 +553,9 @@ Style: concise, practical, plain text. Use ``` fences for any code you show.
         private const val MAX_STEPS = 25
         private const val COMPACT_ABOVE_CHARS = 60_000
         private const val COMPACT_KEEP = 10
+
+        private val APPROVAL_TOOLS = setOf(
+            "write_file", "edit_file", "delete_path", "move_path", "copy_path", "run_command"
+        )
     }
 }

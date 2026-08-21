@@ -45,6 +45,41 @@ class FileOps(private val rootProvider: () -> File) {
         "ERROR: ${e.message}"
     }
 
+    /**
+     * Human-readable preview of what a destructive tool would do, without
+     * touching the filesystem. Used by the approval gate.
+     */
+    fun previewDiff(name: String, argsJson: String): String {
+        val args = runCatching { JSONObject(argsJson) }.getOrDefault(JSONObject())
+        return when (name) {
+            "write_file" -> {
+                val f = resolve(args.optString("path"))
+                val old = if (f.exists()) runCatching { f.readText() }.getOrDefault("") else ""
+                DiffUtil.unified(old, args.optString("content", ""))
+            }
+            "edit_file" -> {
+                val f = resolve(args.optString("path"))
+                if (!f.exists()) return "(file does not exist — edit will fail)"
+                val old = runCatching { f.readText() }.getOrDefault("")
+                val os = args.optString("old_string")
+                if (os.isEmpty() || !old.contains(os)) return "⚠ old_string not found in file — this edit will fail"
+                DiffUtil.unified(old, old.replaceFirst(os, args.optString("new_string", "")))
+            }
+            "delete_path" -> {
+                val f = resolve(args.optString("path"))
+                if (!f.exists()) "(nothing to delete)"
+                else if (f.isFile)
+                    DiffUtil.unified(runCatching { f.readText() }.getOrDefault(""), "")
+                else
+                    "[DIR] ${rel(f)} — folder with ~${f.walkBottomUp().take(2000).count()} entries will be deleted"
+            }
+            "move_path" -> "Move ${args.optString("source")} → ${args.optString("destination")}"
+            "copy_path" -> "Copy ${args.optString("source")} → ${args.optString("destination")}"
+            "run_command" -> "$ ${args.optString("command", "").take(400)}"
+            else -> name
+        }
+    }
+
     fun listFiles(pathInput: String): String {
         val dir = resolve(pathInput)
         if (!dir.exists()) return "ERROR: not found: ${rel(dir)}"

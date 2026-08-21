@@ -81,6 +81,8 @@ fun SettingsScreen(vm: AppViewModel) {
 
         StorageCard(vm)
 
+        SafetyCard(vm, app.settings)
+
         LinuxCard(vm)
 
         GithubCard()
@@ -390,6 +392,37 @@ private fun GithubCard() {
                     modifier = Modifier.padding(start = 10.dp)
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun SafetyCard(vm: AppViewModel, settings: com.danielsem65.semcodeai.core.SettingsStore) {
+    var ask by rememberSaveable { mutableStateOf(settings.askBeforeChanges) }
+
+    Card(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp)
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Ask before changes", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Pause the agent for your approval before it edits files or runs commands — with a diff preview.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = ask, onCheckedChange = {
+                ask = it
+                settings.askBeforeChanges = it
+            })
         }
     }
 }
