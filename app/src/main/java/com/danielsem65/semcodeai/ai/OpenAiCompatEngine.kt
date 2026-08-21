@@ -127,7 +127,7 @@ class OpenAiCompatEngine(
 
     // ---------------- streaming ----------------
 
-    private class ToolAcc(val id: String, val name: String, val args: StringBuilder)
+    private class ToolAcc(var id: String, var name: String, val args: StringBuilder)
 
     override fun chatStream(
         system: String,
