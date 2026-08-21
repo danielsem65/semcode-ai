@@ -2,6 +2,7 @@ package com.danielsem65.semcodeai
 
 import android.app.Application
 import com.danielsem65.semcodeai.core.LinuxEnv
+import com.danielsem65.semcodeai.core.ProjectStore
 import com.danielsem65.semcodeai.core.SettingsStore
 import com.danielsem65.semcodeai.core.ShellSession
 import com.danielsem65.semcodeai.core.Workspace
@@ -25,6 +26,8 @@ class SemApp : Application() {
         }
 
     val linuxEnv: LinuxEnv by lazy { LinuxEnv(this) { Workspace.root(this, settings) } }
+
+    val projectStore: ProjectStore by lazy { ProjectStore(this) }
 
     /** Persistent guest shell inside proot; created on first use after install. */
     fun linuxShell(): ShellSession {

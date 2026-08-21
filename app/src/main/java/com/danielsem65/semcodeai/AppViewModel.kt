@@ -48,7 +48,60 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private val apiHistory = mutableListOf<Msg>()
 
+    // ---------------- projects ----------------
+    private val projectStore get() = getApplication<SemApp>().projectStore
+
+    private val _projects = MutableStateFlow(projectStore.list())
+    val projects: StateFlow<List<com.danielsem65.semcodeai.core.Project>> = _projects
+
+    private val _projectId = MutableStateFlow<String?>(null)
+    val projectId: StateFlow<String?> = _projectId
+
     init { refreshStatus() }
+
+    fun currentProjectName(): String =
+        _projectId.value?.let { pid -> _projects.value.firstOrNull { it.id == pid }?.name }
+            ?: "New chat"
+
+    /** Persist the current conversation (call whenever its content changes). */
+    private fun persist() {
+        val pid = _projectId.value ?: return
+        projectStore.save(pid, currentProjectName(), _messages.value.toList(), apiHistory.toList())
+        _projects.value = projectStore.list()
+    }
+
+    fun newChat() {
+        persist()
+        _projectId.value = null
+        _messages.value = emptyList()
+        apiHistory.clear()
+        _stepText.value = ""
+    }
+
+    fun openProject(id: String) {
+        if (_busy.value) return
+        persist()
+        val data = projectStore.load(id)
+        _projectId.value = id
+        _messages.value = data?.first ?: emptyList()
+        apiHistory.clear()
+        if (data != null) apiHistory += data.second
+    }
+
+    fun renameProject(id: String, name: String) {
+        projectStore.rename(id, name)
+        _projects.value = projectStore.list()
+    }
+
+    fun deleteProject(id: String) {
+        projectStore.delete(id)
+        _projects.value = projectStore.list()
+        if (_projectId.value == id) {
+            _projectId.value = null
+            _messages.value = emptyList()
+            apiHistory.clear()
+        }
+    }
 
     fun activeProvider(): Provider = Providers.byId(settings.activeProviderId)
 
@@ -61,12 +114,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _activeProviderId.value = p.id
         _statusLine.value =
             "${p.displayName} · ${effectiveModel(p)}" + if (!keyOk) "  ⚠ no key" else ""
-    }
-
-    fun clearChat() {
-        _messages.value = emptyList()
-        apiHistory.clear()
-        _stepText.value = ""
     }
 
     fun send(userTextRaw: String) {
@@ -87,6 +134,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
         _messages.value += ChatMessage(ChatMessage.Role.USER, userText)
         apiHistory += Msg.User(userText)
+
+        // Attach this conversation to a persisted project (named from the first message)
+        if (_projectId.value == null || !projectStore.exists(_projectId.value!!)) {
+            val title = userText.replace('\n', ' ').trim().take(42).ifBlank { "New chat" }
+            _projectId.value = projectStore.create(title)
+            _projects.value = projectStore.list()
+        }
+
         _busy.value = true
         _stepText.value = "thinking…"
 
@@ -96,6 +151,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 emitModel("Error: ${e.message ?: "request failed"}", isError = true)
             } finally {
+                persist()
                 _busy.value = false
                 _stepText.value = ""
             }

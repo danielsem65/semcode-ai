@@ -31,7 +31,21 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
     private val linuxDir get() = File(context.filesDir, "linux")
     private val rootfs get() = File(linuxDir, "rootfs")
 
-    fun isInstalled(): Boolean = File(rootfs, "bin/sh").exists()
+    /**
+     * Symlink-safe: guest /bin/sh is a symlink (-> /bin/busybox) whose target
+     * only exists inside the rootfs, so File.exists() would follow it on the
+     * HOST filesystem and report false. We check without following links, and
+     * fall back to the install marker.
+     */
+    fun isInstalled(): Boolean {
+        if (File(linuxDir, ".distro").exists() && File(rootfs, "etc").isDirectory) return true
+        return runCatching {
+            java.nio.file.Files.exists(
+                java.nio.file.Paths.get(rootfs.absolutePath, "bin", "sh"),
+                java.nio.file.LinkOption.NOFOLLOW_LINKS
+            )
+        }.getOrDefault(false)
+    }
 
     fun installedLabel(): String =
         if (isInstalled()) File(linuxDir, ".distro").takeIf { it.exists() }?.readText()?.trim() ?: "Linux"
@@ -47,19 +61,49 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
         val tar = File(linuxDir, "${d.name}.tar.gz")
         download(d.url, tar, onProgress)
 
-        val p = ProcessBuilder("/system/bin/toybox", "tar", "-xzf", tar.path, "-C", rootfs.path)
-            .redirectErrorStream(true)
-            .start()
-        val out = p.inputStream.bufferedReader().readText()
-        val rc = p.waitFor()
-        tar.delete()
-        if (rc != 0) throw RuntimeException("extract failed rc=$rc ${out.take(200)}")
+        // 1st try: toybox tar with gzip. Some builds lack -z → gunzip fallback below.
+        var rc = runTar(listOf("-xzf", tar.path))
+        if (!symlinkSafeShExists()) {
+            rc = runCatching {
+                val plain = File(linuxDir, "${d.name}.tar")
+                if (!plain.exists()) {
+                    ProcessBuilder("/system/bin/toybox", "gzip", "-d", "-f", tar.path)
+                        .redirectErrorStream(true).start().waitFor()
+                }
+                if (plain.exists()) {
+                    val rc2 = runTar(listOf("-xf", plain.path))
+                    plain.delete()
+                    rc2
+                } else -1
+            }.getOrDefault(-1)
+        }
+        if (tar.exists()) tar.delete()
+
+        if (!symlinkSafeShExists()) throw RuntimeException("extract failed (rc=$rc) — device toybox unsupported")
 
         File(rootfs, "etc").mkdirs()
         File(rootfs, "etc/resolv.conf").writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
         File(rootfs, "etc/hosts").writeText("127.0.0.1 localhost\n")
         File(linuxDir, ".distro").writeText(d.label)
     }
+
+    private fun symlinkSafeShExists(): Boolean = runCatching {
+        java.nio.file.Files.exists(
+            java.nio.file.Paths.get(rootfs.absolutePath, "bin", "sh"),
+            java.nio.file.LinkOption.NOFOLLOW_LINKS
+        )
+    }.getOrDefault(false)
+
+    private fun runTar(args: List<String>): Int =
+        try {
+            val p = ProcessBuilder(
+                "/system/bin/toybox", "tar", *args.toTypedArray(), "-C", rootfs.absolutePath
+            ).redirectErrorStream(true).start()
+            p.inputStream.bufferedReader().readText()
+            p.waitFor()
+        } catch (e: Exception) {
+            -1
+        }
 
     fun remove() {
         linuxDir.deleteRecursively()
