@@ -90,8 +90,7 @@ class OpenAiCompatEngine(
 
         client.newCall(req).execute().use { resp ->
             val raw = resp.body?.string() ?: "{}"
-            if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}: ${errText(raw)}")
-
+            if (!resp.isSuccessful) throw RuntimeException(friendlyError(resp.code, raw))
             val json = runCatching { JSONObject(raw) }.getOrDefault(JSONObject())
             val msg = json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
                 ?: throw RuntimeException("Provider sent no message.")
@@ -119,6 +118,10 @@ class OpenAiCompatEngine(
         val b = Request.Builder().url(url)
         if (!isLocal) b.header("Authorization", "Bearer $apiKey")
         else if (apiKey.isNotBlank() && apiKey != "none") b.header("Authorization", "Bearer $apiKey")
+        if (baseUrl.contains("opencode.ai")) {
+            // Zen's upstream gates free models to official OpenCode clients by User-Agent
+            b.header("User-Agent", "opencode/1.18.16")
+        }
         if (baseUrl.contains("openrouter")) {
             b.header("X-Title", "SemCode AI")
             b.header("HTTP-Referer", "https://github.com/danielsem65/semcode-ai")
@@ -132,5 +135,15 @@ class OpenAiCompatEngine(
         private fun errText(body: String): String = runCatching {
             JSONObject(body).optJSONObject("error")?.optString("message")?.take(300)
         }.getOrNull() ?: body.take(300)
+
+        private fun friendlyError(code: Int, body: String): String {
+            val detail = errText(body)
+            val limited = code == 429 || code == 492 ||
+                detail.contains("rate limit", true) || detail.contains("FreeUsageLimit", true)
+            return if (limited)
+                "This free model's quota is used up right now (Zen resets daily). " +
+                    "Pick another model from the list, switch provider in Settings, or try again later. [$code]"
+            else "HTTP $code: $detail"
+        }
     }
 }
