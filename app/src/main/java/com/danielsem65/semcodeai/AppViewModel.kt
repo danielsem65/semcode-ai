@@ -137,8 +137,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         args.optString("command", ""),
                         args.optLong("timeout_seconds", 30).coerceIn(1, 600)
                     )
-                    name.startsWith("github_") -> githubDispatch(name, args)
-                    else -> fileOps.execute(name, args)
+                    else ->
+                        if (name.startsWith("github_")) githubDispatch(name, args)
+                        else fileOps.execute(name, args)
                 }
             } catch (e: Exception) {
                 "ERROR: ${e.message}"

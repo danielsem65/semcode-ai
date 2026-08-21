@@ -76,7 +76,7 @@ fun MarkdownText(text: String, modifier: Modifier = Modifier) {
 private fun CodeBlock(code: String, keyAttr: Int) {
     val clipboard = LocalClipboardManager.current
     Surface(
-        color = Color(CodeBg),
+        color = CodeBg,
         shape = RoundedCornerShape(10.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         modifier = Modifier
