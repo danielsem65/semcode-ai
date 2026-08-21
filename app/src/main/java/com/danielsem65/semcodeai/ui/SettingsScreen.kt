@@ -92,7 +92,7 @@ private fun ProviderRow(vm: AppViewModel, p: com.danielsem65.semcodeai.ai.Provid
     val settings = (context.applicationContext as SemApp).settings
     val scope = rememberCoroutineScope()
 
-    val active = settings.activeProviderId == p.id
+    val active = vm.activeProviderId.collectAsState().value == p.id
     var expanded by remember { mutableStateOf(false) }
     var keyDraft by remember(p.id) { mutableStateOf("") }
 
@@ -197,8 +197,8 @@ private fun ProviderRow(vm: AppViewModel, p: com.danielsem65.semcodeai.ai.Provid
                 Button(onClick = {
                     settings.activeProviderId = p.id
                     vm.refreshStatus()
-                }, enabled = !active) {
-                    Text(if (active) "Active ✓" else "Use this provider")
+                }) {
+                    Text(if (active) "Active ✓ (tap to re-apply)" else "Use this provider")
                 }
             }
         }
@@ -250,7 +250,7 @@ private fun ModelField(vm: AppViewModel, p: com.danielsem65.semcodeai.ai.Provide
                     DropdownMenuItem(text = { Text(id, style = MaterialTheme.typography.bodySmall) },
                         onClick = {
                             text = id
-                            settings.modelOverride = ""
+                            settings.modelOverride = if (id == p.defaultModel) "" else id
                             vm.refreshStatus()
                             menuOpen = false
                         })

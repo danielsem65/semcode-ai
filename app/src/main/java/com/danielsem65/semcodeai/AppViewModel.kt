@@ -43,6 +43,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _statusLine = MutableStateFlow("")
     val statusLine: StateFlow<String> = _statusLine
 
+    private val _activeProviderId = MutableStateFlow("")
+    val activeProviderId: StateFlow<String> = _activeProviderId
+
     private val apiHistory = mutableListOf<Msg>()
 
     init { refreshStatus() }
@@ -55,6 +58,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshStatus() {
         val p = activeProvider()
         val keyOk = p.isLocal || settings.hasKeyFor(p.id)
+        _activeProviderId.value = p.id
         _statusLine.value =
             "${p.displayName} · ${effectiveModel(p)}" + if (!keyOk) "  ⚠ no key" else ""
     }
