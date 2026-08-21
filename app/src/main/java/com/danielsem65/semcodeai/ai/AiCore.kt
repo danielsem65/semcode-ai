@@ -35,6 +35,21 @@ interface AiEngine {
     /** One request/response round. Blocking; call from a background dispatcher. */
     fun chat(system: String, history: List<Msg>, tools: List<ToolDef>): EngineReply
 
+    /**
+     * Streaming variant — calls onDelta with each text chunk as it arrives.
+     * Tool-call results still arrive in the final EngineReply.
+     * Default falls back to non-streaming chat().
+     */
+    fun chatStream(
+        system: String,
+        history: List<Msg>,
+        tools: List<ToolDef>,
+        onDelta: (String) -> Unit
+    ): EngineReply = chat(system, history, tools)
+
+    /** Cancels any in-flight request (streaming or not). No-op when idle. */
+    fun cancelActive() {}
+
     /** Lists available model IDs; doubles as a key tester. */
     fun listModels(): List<String>
 }

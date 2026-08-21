@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -59,11 +60,15 @@ fun ChatScreen(
     val status by vm.statusLine.collectAsState()
     val projects by vm.projects.collectAsState()
     val activeId by vm.projectId.collectAsState()
+    val liveText by vm.liveText.collectAsState()
     var input by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
 
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+    LaunchedEffect(messages.size, busy, liveText.isNotBlank()) {
+        val lastIndex =
+            if (busy && liveText.isNotBlank()) messages.size
+            else messages.size - 1
+        if (lastIndex >= 0) runCatching { listState.animateScrollToItem(lastIndex) }
     }
 
     Column(
@@ -114,6 +119,25 @@ fun ChatScreen(
                 item { WelcomeCard(onOpenSettings) }
             }
             items(messages, key = { it.hashCode() }) { msg -> Bubble(msg) }
+            if (busy && liveText.isNotBlank()) {
+                item(key = "live") {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(16.dp),
+                            tonalElevation = 2.dp,
+                            modifier = Modifier.widthIn(max = 330.dp)
+                        ) {
+                            SelectionContainer {
+                                MarkdownText(
+                                    liveText,
+                                    Modifier.padding(horizontal = 13.dp, vertical = 9.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
             if (busy) {
                 item {
                     Row(
@@ -147,15 +171,28 @@ fun ChatScreen(
                     maxLines = 5,
                     shape = RoundedCornerShape(24.dp)
                 )
-                IconButton(
-                    onClick = { vm.send(input); input = "" },
-                    enabled = input.isNotBlank() && !busy,
-                    modifier = Modifier
-                        .padding(start = 4.dp)
-                        .alpha(if (input.isBlank()) 0.35f else 1f)
-                ) {
-                    Icon(Icons.Filled.Send, contentDescription = "Send",
-                        tint = MaterialTheme.colorScheme.primary)
+                if (busy) {
+                    IconButton(
+                        onClick = { vm.stopGeneration() },
+                        modifier = Modifier.padding(start = 4.dp)
+                    ) {
+                        Icon(
+                            Icons.Filled.Stop,
+                            contentDescription = "Stop",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = { vm.send(input); input = "" },
+                        enabled = input.isNotBlank(),
+                        modifier = Modifier
+                            .padding(start = 4.dp)
+                            .alpha(if (input.isBlank()) 0.35f else 1f)
+                    ) {
+                        Icon(Icons.Filled.Send, contentDescription = "Send",
+                            tint = MaterialTheme.colorScheme.primary)
+                    }
                 }
             }
         }

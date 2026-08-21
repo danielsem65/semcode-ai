@@ -6,11 +6,13 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
  * One engine for every OpenAI-compatible endpoint:
  * OpenCode Zen, OpenRouter, and Ollama's local server.
+ * Supports SSE streaming (chatStream) and mid-flight cancellation.
  */
 class OpenAiCompatEngine(
     private val baseUrl: String,
@@ -25,22 +27,15 @@ class OpenAiCompatEngine(
         .writeTimeout(60L, TimeUnit.SECONDS)
         .build()
 
-    override fun listModels(): List<String> {
-        val req = baseRequest("$baseUrl/models").build()
-        client.newCall(req).execute().use { resp ->
-            val body = resp.body?.string() ?: "{}"
-            if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}: ${errText(body)}")
-            val data = JSONObject(body).optJSONArray("data") ?: return emptyList()
-            val ids = mutableListOf<String>()
-            for (i in 0 until data.length()) {
-                val id = data.optJSONObject(i)?.optString("id") ?: continue
-                if (id.isNotBlank()) ids += id
-            }
-            return ids.distinct()
-        }
+    @Volatile private var activeCall: okhttp3.Call? = null
+
+    override fun cancelActive() {
+        runCatching { activeCall?.cancel() }
     }
 
-    override fun chat(system: String, history: List<Msg>, tools: List<ToolDef>): EngineReply {
+    // ---------------- request bodies ----------------
+
+    private fun messagesJson(system: String, history: List<Msg>): JSONArray {
         val messages = JSONArray().put(
             JSONObject().put("role", "system").put("content", system)
         )
@@ -67,7 +62,10 @@ class OpenAiCompatEngine(
                         .put("content", m.result))
             }
         }
+        return messages
+    }
 
+    private fun toolsJson(tools: List<ToolDef>): JSONArray {
         val toolsArr = JSONArray()
         for (t in tools) {
             toolsArr.put(JSONObject()
@@ -77,41 +75,7 @@ class OpenAiCompatEngine(
                     .put("description", t.description)
                     .put("parameters", t.parameters)))
         }
-
-        val body = JSONObject()
-            .put("model", model)
-            .put("messages", messages)
-            .put("tools", toolsArr)
-            .put("temperature", 0.3)
-
-        val req = baseRequest("$baseUrl/chat/completions")
-            .post(body.toString().toRequestBody(JSON))
-            .build()
-
-        client.newCall(req).execute().use { resp ->
-            val raw = resp.body?.string() ?: "{}"
-            if (!resp.isSuccessful) throw RuntimeException(friendlyError(resp.code, raw))
-            val json = runCatching { JSONObject(raw) }.getOrDefault(JSONObject())
-            val msg = json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
-                ?: throw RuntimeException("Provider sent no message.")
-
-            var text = msg.optString("content", "").takeIf { it.isNotBlank() }
-            val calls = mutableListOf<ToolCall>()
-            val tc = msg.optJSONArray("tool_calls")
-            if (tc != null) {
-                for (i in 0 until tc.length()) {
-                    val c = tc.optJSONObject(i) ?: continue
-                    val fn = c.optJSONObject("function") ?: continue
-                    calls += ToolCall(
-                        id = c.optString("id", "call_$i"),
-                        name = fn.optString("name"),
-                        argsJson = fn.optString("arguments", "{}").ifBlank { "{}" }
-                    )
-                }
-            }
-            if (text == null && calls.isEmpty()) throw RuntimeException("Provider returned empty content.")
-            return EngineReply(text, calls.filter { it.name.isNotBlank() })
-        }
+        return toolsArr
     }
 
     private fun baseRequest(url: String): Request.Builder {
@@ -127,6 +91,141 @@ class OpenAiCompatEngine(
             b.header("HTTP-Referer", "https://github.com/danielsem65/semcode-ai")
         }
         return b
+    }
+
+    private fun postBody(system: String, history: List<Msg>, tools: List<ToolDef>, stream: Boolean): Request =
+        baseRequest("$baseUrl/chat/completions")
+            .post(JSONObject()
+                .put("model", model)
+                .put("messages", messagesJson(system, history))
+                .put("tools", toolsJson(tools))
+                .put("temperature", 0.3)
+                .put("stream", stream)
+                .toString()
+                .toRequestBody(JSON))
+            .build()
+
+    // ---------------- non-streaming ----------------
+
+    override fun chat(system: String, history: List<Msg>, tools: List<ToolDef>): EngineReply {
+        val call = client.newCall(postBody(system, history, tools, stream = false))
+        activeCall = call
+        try {
+            call.execute().use { resp ->
+                val raw = resp.body?.string() ?: "{}"
+                if (!resp.isSuccessful) throw RuntimeException(friendlyError(resp.code, raw))
+
+                val json = runCatching { JSONObject(raw) }.getOrDefault(JSONObject())
+                val msg = json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
+                    ?: throw RuntimeException("Provider sent no message.")
+                return parseMessage(msg)
+            }
+        } finally {
+            if (activeCall === call) activeCall = null
+        }
+    }
+
+    // ---------------- streaming ----------------
+
+    private class ToolAcc(val id: String, val name: String, val args: StringBuilder)
+
+    override fun chatStream(
+        system: String,
+        history: List<Msg>,
+        tools: List<ToolDef>,
+        onDelta: (String) -> Unit
+    ): EngineReply {
+        val call = client.newCall(postBody(system, history, tools, stream = true))
+        activeCall = call
+        try {
+            call.execute().use { resp ->
+                val body = resp.body ?: throw IOException("empty response body")
+                if (!resp.isSuccessful) throw RuntimeException(friendlyError(resp.code, body.string()))
+
+                val text = StringBuilder()
+                val slots = HashMap<Int, ToolAcc>()
+
+                body.source().inputStream().bufferedReader().useLines { lines ->
+                    for (line in lines) {
+                        val payload = line.takeIf { it.startsWith("data:") }?.removePrefix("data:")?.trim()
+                            ?: continue
+                        if (payload == "[DONE]") break
+                        val chunk = runCatching { JSONObject(payload) }.getOrNull() ?: continue
+                        val delta = chunk.optJSONArray("choices")?.optJSONObject(0)
+                            ?.optJSONObject("delta") ?: continue
+
+                        delta.optString("content", "").takeIf { it.isNotEmpty() }?.let {
+                            text.append(it)
+                            onDelta(it)
+                        }
+
+                        val tcs = delta.optJSONArray("tool_calls") ?: continue
+                        for (i in 0 until tcs.length()) {
+                            val tc = tcs.optJSONObject(i) ?: continue
+                            val idx = tc.optInt("index", i)
+                            val acc = slots.getOrPut(idx) {
+                                val fn = tc.optJSONObject("function")
+                                ToolAcc(
+                                    id = tc.optString("id", "call_$idx"),
+                                    name = fn?.optString("name", "") ?: "",
+                                    args = StringBuilder(fn?.optString("arguments", "") ?: "")
+                                )
+                            }
+                            tc.optString("id", "").takeIf { it.isNotEmpty() }?.let { acc.id = it }
+                            tc.optJSONObject("function")?.optString("name", "")?.takeIf { it.isNotEmpty() }
+                                ?.let { acc.name = it }
+                            tc.optJSONObject("function")?.optString("arguments", "")?.takeIf { it.isNotEmpty() }
+                                ?.let { acc.args.append(it) }
+                        }
+                    }
+                }
+
+                val calls = slots.toSortedMap().values.mapNotNull { acc ->
+                    if (acc.name.isBlank()) null
+                    else ToolCall(acc.id, acc.name, acc.args.toString().ifBlank { "{}" })
+                }
+                return EngineReply(text.toString().ifBlank { null }, calls)
+            }
+        } catch (e: IOException) {
+            throw IOException("stream interrupted", e)
+        } finally {
+            if (activeCall === call) activeCall = null
+        }
+    }
+
+    // ---------------- shared parsing / errors ----------------
+
+    private fun parseMessage(msg: JSONObject): EngineReply {
+        var text = msg.optString("content", "").takeIf { it.isNotBlank() }
+        val calls = mutableListOf<ToolCall>()
+        val tc = msg.optJSONArray("tool_calls")
+        if (tc != null) {
+            for (i in 0 until tc.length()) {
+                val c = tc.optJSONObject(i) ?: continue
+                val fn = c.optJSONObject("function") ?: continue
+                calls += ToolCall(
+                    id = c.optString("id", "call_$i"),
+                    name = fn.optString("name"),
+                    argsJson = fn.optString("arguments", "{}").ifBlank { "{}" }
+                )
+            }
+        }
+        if (text == null && calls.isEmpty()) throw RuntimeException("Provider returned empty content.")
+        return EngineReply(text, calls.filter { it.name.isNotBlank() })
+    }
+
+    override fun listModels(): List<String> {
+        client.newCall(baseRequest("$baseUrl/models").build()).execute().use { resp ->
+            val body = resp.body?.string() ?: "{}"
+            if (!resp.isSuccessful) throw RuntimeException("HTTP ${resp.code}: ${errText(body)}")
+            val data = JSONObject(body).optJSONArray("data") ?: return emptyList()
+            val ids = mutableListOf<String>()
+            for (i in 0 until data.length()) {
+                val id = data.optJSONObject(i)?.optString("id") ?: continue
+                if (id.isNotBlank()) ids += id
+            }
+            return ids.distinct()
+        }
     }
 
     companion object {

@@ -46,6 +46,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _activeProviderId = MutableStateFlow("")
     val activeProviderId: StateFlow<String> = _activeProviderId
 
+    // ---------------- streaming / stop ----------------
+    @Volatile private var activeEngine: com.danielsem65.semcodeai.ai.AiEngine? = null
+    private val stopRequested = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /** Text arriving token-by-token for the in-flight reply. */
+    private val _liveText = MutableStateFlow("")
+    val liveText: StateFlow<String> = _liveText
+
     private val apiHistory = mutableListOf<Msg>()
 
     // ---------------- projects ----------------
@@ -154,20 +162,37 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 persist()
                 _busy.value = false
                 _stepText.value = ""
+                _liveText.value = ""
+                activeEngine = null
             }
         }
     }
 
     private suspend fun runAgent(provider: Provider, apiKey: String, model: String) {
         val engine = Providers.create(provider, apiKey, model)
+        activeEngine = engine
+        stopRequested.set(false)
         var steps = 0
 
         while (steps < MAX_STEPS) {
+            if (stopRequested.get()) {
+                emitModel("_Stopped._")
+                return
+            }
             steps++
             _stepText.value = "step $steps/$MAX_STEPS"
+            maybeCompact(engine)
 
             val reply: EngineReply = withContext(Dispatchers.IO) {
-                engine.chat(systemPrompt(), apiHistory.toList(), com.danielsem65.semcodeai.ai.Tools.all())
+                _liveText.value = ""
+                try {
+                    engine.chatStream(
+                        systemPrompt(), apiHistory.toList(),
+                        com.danielsem65.semcodeai.ai.Tools.all()
+                    ) { delta -> _liveText.value += delta }
+                } finally {
+                    _liveText.value = ""
+                }
             }
 
             if (reply.calls.isEmpty()) {
@@ -177,6 +202,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (!reply.text.isNullOrBlank()) emitModel(reply.text)
 
             for (call in reply.calls) {
+                if (stopRequested.get()) {
+                    apiHistory += Msg.ToolResult(call.id, call.name, "STOPPED_BY_USER")
+                    continue
+                }
                 apiHistory += Msg.ToolUse(call.id, call.name, call.argsJson)
                 emitTool("${call.name} ${shortArgs(call.argsJson)}")
                 _stepText.value = "step $steps/$MAX_STEPS · ${call.name}"
@@ -185,7 +214,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 apiHistory += Msg.ToolResult(call.id, call.name, result.take(20_000))
             }
         }
-        emitModel("Reached the $MAX_STEPS-step limit — say \"continue\" and I'll keep going.")
+        if (!stopRequested.get()) {
+            emitModel("Reached the $MAX_STEPS-step limit — say \"continue\" and I'll keep going.")
+        } else {
+            emitModel("_Stopped._")
+        }
+    }
+
+    /** Stops the current run at the next boundary and aborts in-flight requests. */
+    fun stopGeneration() {
+        stopRequested.set(true)
+        activeEngine?.cancelActive()
     }
 
     private suspend fun dispatch(name: String, argsJson: String): String {
@@ -223,11 +262,65 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
 
+    // ---------------- context management ----------------
+
+    private fun Msg.approxChars(): Int = when (this) {
+        is Msg.User -> text.length
+        is Msg.AssistantText -> text.length
+        is Msg.ToolUse -> argsJson.length + 40
+        is Msg.ToolResult -> result.length
+    }
+
+    /**
+     * Long-project compaction: when the API history grows past the char budget,
+     * summarize everything except the last few messages into a single handover
+     * note and continue from there.
+     */
+    private suspend fun maybeCompact(engine: com.danielsem65.semcodeai.ai.AiEngine) {
+        val total = apiHistory.sumOf { it.approxChars() }
+        if (total < COMPACT_ABOVE_CHARS || apiHistory.size < COMPACT_KEEP + 4) return
+
+        val head = apiHistory.dropLast(COMPACT_KEEP)
+        val tail = apiHistory.takeLast(COMPACT_KEEP)
+
+        val transcript = StringBuilder()
+        for (m in head) {
+            transcript.append(
+                when (m) {
+                    is Msg.User -> "USER: ${m.text.take(1200)}\n"
+                    is Msg.AssistantText -> "ASSISTANT: ${m.text.take(1200)}\n"
+                    is Msg.ToolUse -> "TOOL ${m.name} ${m.argsJson.take(300)}\n"
+                    is Msg.ToolResult -> "RESULT: ${m.result.take(600)}\n"
+                }
+            )
+        }
+
+        _stepText.value = "compacting context…"
+        val summary = runCatching {
+            engine.chat(
+                "You compress coding-agent worklogs. Summarize the following earlier " +
+                    "conversation into a compact handover for the next session: project names, " +
+                    "key files, decisions made, what is done, current task, next steps. " +
+                    "Max 250 words, plain text.",
+                listOf(Msg.User(transcript.toString().take(30_000))),
+                emptyList()
+            ).text ?: ""
+        }.getOrDefault("")
+
+        if (summary.isBlank()) return
+        apiHistory.clear()
+        apiHistory += Msg.AssistantText("[Context compacted — summary of earlier work]\n$summary")
+        apiHistory += tail
+    }
+
     private fun systemPrompt(): String {
         val root = fileOps.root.path
         val fullMode = settings.fullStorage
         val app = getApplication<SemApp>()
         val linuxOn = _termMode.value == "linux" && app.linuxEnv.isInstalled()
+        val memFile = java.io.File(fileOps.root, "AGENTS.md")
+        val memory = if (memFile.exists())
+            runCatching { memFile.readText() }.getOrDefault("").take(4000) else ""
         val shellLine = if (linuxOn)
             "- Shell: FULL LINUX (${app.linuxEnv.installedLabel()} via proot) through run_command. " +
                 "apt/apk install, git, python3 and the distro's toolchain are available. " +
@@ -245,13 +338,19 @@ Environment:
 - Storage mode: ${if (fullMode) "FULL device storage enabled" else "app-private workspace (user can enable full storage in Settings)"}. Absolute paths outside the workspace may fail unless full storage is on.
 $shellLine
 
+${if (memory.isNotBlank())
+    "Project memory (AGENTS.md):\n$memory\n"
+else
+    "Project memory: AGENTS.md does not exist yet at the workspace root.\n"}
+
 Working method:
 1. PLAN briefly, then act. Batch independent tool calls.
 2. INSPECT first: list_files/read_file/search_in_files so edits match reality.
-3. EDIT precisely: edit_file requires old_string copied EXACTLY from the file (whitespace included), prefer many small edits over full rewrites; use write_file for new files or complete rewrites.
-4. VERIFY after changes: re-read edited regions or grep them; fix anything wrong before reporting done.
-5. GIT: status → push with a clean conventional commit message when asked. Never force anything; report errors honestly.
-6. FINISH with a tight summary: files changed, what you verified, next steps if any.
+3. EDIT precisely: edit_file requires old_string copied EXACTLY from the file (whitespace included); prefer many small edits over full rewrites; use write_file for new files or complete rewrites.
+4. MEMORY: AGENTS.md at the workspace root stores durable facts (architecture, decisions, conventions, current goal). Create/update it with write_file whenever such facts change or are learned.
+5. VERIFY after changes: re-read edited regions or grep them; fix anything wrong before reporting done.
+6. GIT: status → push with a clean conventional commit message when asked. Never force anything; report errors honestly.
+7. FINISH with a tight summary: files changed, what you verified, next steps if any.
 
 Style: concise, practical, plain text. Use ``` fences for any code you show.
 """.trimIndent()
@@ -386,5 +485,7 @@ Style: concise, practical, plain text. Use ``` fences for any code you show.
 
     companion object {
         private const val MAX_STEPS = 25
+        private const val COMPACT_ABOVE_CHARS = 60_000
+        private const val COMPACT_KEEP = 10
     }
 }
