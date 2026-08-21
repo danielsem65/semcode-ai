@@ -47,7 +47,7 @@ data class Provider(
 object Providers {
     val ALL = listOf(
         Provider("gemini", "Gemini (free tier)", EngineKind.GEMINI,
-            "https://generativelanguage.googleapis.com/v1beta", "gemini-2.5-flash",
+            "https://generativelanguage.googleapis.com/v1beta", "gemini-3.6-flash",
             "https://aistudio.google.com/apikey", "Free API key from Google AI Studio"),
         Provider("zen", "OpenCode Zen (free models)", EngineKind.OPENAI_COMPAT,
             "https://opencode.ai/zen/v1", "big-pickle",

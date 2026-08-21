@@ -53,8 +53,8 @@ class GeminiEngine(private val apiKey: String, private val model: String) : AiEn
         }
 
         val genConfig = JSONObject().put("temperature", 0.3)
-        // Give 2.5-series models a real thinking budget for deep reasoning.
-        if (model.startsWith("gemini-2.5") || model.contains("-thinking")) {
+        // Give thinking-capable models a real thinking budget for deep reasoning.
+        if (model.startsWith("gemini-2.5") || model.startsWith("gemini-3") || model.contains("-thinking")) {
             genConfig.put("thinkingConfig", JSONObject().put("thinkingBudget", 8192))
         }
         val body = JSONObject()
