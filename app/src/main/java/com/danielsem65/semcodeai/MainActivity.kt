@@ -22,6 +22,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import com.danielsem65.semcodeai.ui.ChatScreen
 import com.danielsem65.semcodeai.ui.FilesScreen
@@ -69,11 +70,20 @@ private fun App(vm: AppViewModel) {
         }
     ) { padding ->
         val m = Modifier.padding(padding)
+        val holder = rememberSaveableStateHolder()
         when (tab) {
-            0 -> Box(m) { ChatScreen(vm, onOpenSettings = { tab = 3 }) }
-            1 -> Box(m) { TerminalScreen(vm) }
-            2 -> Box(m) { FilesScreen() }
-            else -> Box(m) { SettingsScreen(vm) }
+            0 -> holder.SaveableStateProvider("chat") {
+                Box(m) { ChatScreen(vm, onOpenSettings = { tab = 3 }) }
+            }
+            1 -> holder.SaveableStateProvider("shell") {
+                Box(m) { TerminalScreen(vm) }
+            }
+            2 -> holder.SaveableStateProvider("files") {
+                Box(m) { FilesScreen() }
+            }
+            else -> holder.SaveableStateProvider("settings") {
+                Box(m) { SettingsScreen(vm) }
+            }
         }
     }
 }

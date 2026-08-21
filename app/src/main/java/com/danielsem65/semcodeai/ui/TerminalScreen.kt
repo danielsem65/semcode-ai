@@ -27,6 +27,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,7 +43,7 @@ fun TerminalScreen(vm: AppViewModel) {
     val lines by vm.termLines.collectAsState()
     val mode by vm.termMode.collectAsState()
     val listState = rememberLazyListState()
-    var input by remember { mutableStateOf("") }
+    var input by rememberSaveable { mutableStateOf("") }
     val context = LocalContext.current
     val app = context.applicationContext as SemApp
     var linuxOk by remember { mutableStateOf(app.linuxEnv.isInstalled()) }

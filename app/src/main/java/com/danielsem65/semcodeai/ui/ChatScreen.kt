@@ -31,6 +31,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,7 +46,7 @@ fun ChatScreen(vm: AppViewModel, onOpenSettings: () -> Unit) {
     val busy by vm.busy.collectAsState()
     val step by vm.stepText.collectAsState()
     val status by vm.statusLine.collectAsState()
-    var input by remember { mutableStateOf("") }
+    var input by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
 
     LaunchedEffect(messages.size) {

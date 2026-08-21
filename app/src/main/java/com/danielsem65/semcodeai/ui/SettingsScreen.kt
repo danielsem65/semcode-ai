@@ -35,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -100,8 +101,8 @@ private fun ProviderRow(vm: AppViewModel, p: com.danielsem65.semcodeai.ai.Provid
     val scope = rememberCoroutineScope()
 
     val active = vm.activeProviderId.collectAsState().value == p.id
-    var expanded by remember { mutableStateOf(false) }
-    var keyDraft by remember(p.id) { mutableStateOf("") }
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    var keyDraft by rememberSaveable(p.id) { mutableStateOf("") }
 
     Card(
         colors = CardDefaults.cardColors(
@@ -331,7 +332,7 @@ private fun GithubCard() {
     val app = context.applicationContext as SemApp
     val scope = rememberCoroutineScope()
 
-    var token by remember { mutableStateOf(app.settings.githubToken) }
+    var token by rememberSaveable { mutableStateOf(app.settings.githubToken) }
     var state by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
