@@ -26,6 +26,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.danielsem65.semcodeai.ui.ChatScreen
@@ -51,7 +54,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun App(vm: AppViewModel) {
     val termOpen by vm.termOpen.collectAsState()
-    var tab by androidx.compose.runtime.rememberSaveable { androidx.compose.runtime.mutableIntStateOf(0) }
+    var tab by rememberSaveable { mutableIntStateOf(0) }
 
     Scaffold(
         bottomBar = {

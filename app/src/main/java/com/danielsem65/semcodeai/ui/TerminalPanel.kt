@@ -97,8 +97,7 @@ fun TerminalPanel(vm: AppViewModel, modifier: Modifier = Modifier) {
                     modifier = Modifier.weight(1f),
                     placeholder = { Text("command…", fontSize = 13.sp) },
                     singleLine = true,
-                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    fontSize = 13.sp
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
                 )
                 IconButton(onClick = {
                     vm.termRun(input)
