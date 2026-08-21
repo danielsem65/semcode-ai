@@ -76,7 +76,7 @@ object FileOps {
         val f = resolve(pathInput)
         f.parentFile?.let { if (!it.exists()) it.mkdirs() }
         f.writeText(content)
-        return "OK: wrote ${humanSize(content.toByteArray().size)} to ${f.path}"
+        return "OK: wrote ${humanSize(content.toByteArray().size.toLong())} to ${f.path}"
     }
 
     fun createFolder(pathInput: String): String {

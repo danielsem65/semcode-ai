@@ -22,8 +22,8 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.danielsem65.semcodeai.ui.ChatScreen
 import com.danielsem65.semcodeai.ui.FilesScreen
-import com.danielsem65.semcodeai.ui.SemCodeTheme
 import com.danielsem65.semcodeai.ui.SettingsScreen
+import com.danielsem65.semcodeai.ui.theme.SemCodeTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
