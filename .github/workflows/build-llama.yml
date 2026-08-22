@@ -49,6 +49,12 @@ jobs:
             ls -lh /out
           '
 
+      - name: Upload artifact backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-server-aarch64
+          path: out/llama-server
+
       - name: Commit binary into repo
         run: |
           ls -lh out/
@@ -63,4 +69,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/src/main/jniLibs/arm64-v8a/libllama-server.so
           git commit -m "add static llama-server (linux/arm64) ${{ steps.tag.outputs.tag }} as libllama-server.so" || echo "no changes"
+          # The repo may have moved forward while we were compiling (~1h).
+          git fetch origin main
+          git rebase origin/main
           git push origin main
