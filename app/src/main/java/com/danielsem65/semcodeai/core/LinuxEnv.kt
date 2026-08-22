@@ -1,6 +1,7 @@
 package com.danielsem65.semcodeai.core
 
 import android.content.Context
+import android.os.Environment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -42,7 +43,8 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
         }
     }
 
-    private val linuxDir get() = File(context.filesDir, "linux")
+    private val linuxDir: File
+        get() = File(Environment.getExternalStorageDirectory(), ".semcode-linux")
     private val rootfs get() = File(linuxDir, "rootfs")
 
     // ---------------- health ----------------
