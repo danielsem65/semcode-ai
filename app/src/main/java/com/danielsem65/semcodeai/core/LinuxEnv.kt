@@ -68,36 +68,62 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
      *  (and we, remotely) can see exactly what is on disk and where. */
     fun diagnose(): String = buildString {
         appendLine("Path: ${rootfs.absolutePath}")
-        val bb = File(rootfs, "bin/busybox")
-        appendLine("busybox: " + if (bb.exists()) "${bb.length()} bytes" else "MISSING")
         val shFile = File(rootfs, "bin/sh")
         append("sh: ")
         appendLine(
             runCatching {
                 val p = Paths.get(shFile.absolutePath)
                 when {
-                    Files.isSymbolicLink(p) -> "symlink -> ${Files.readSymbolicLink(p)}"
-                    shFile.exists() -> "file (${shFile.length()} bytes)"
-                    else -> "MISSING"
+                    !Files.exists(p, LinkOption.NOFOLLOW_LINKS) -> "MISSING"
+                    else -> {
+                        var cur = p
+                        var hops = 0
+                        while (Files.isSymbolicLink(cur) && hops++ < 8) {
+                            val t = Files.readSymbolicLink(cur)
+                            cur = if (t.isAbsolute)
+                                Paths.get(rootfs.absolutePath, t.toString().trimStart('/'))
+                            else cur.parent.resolve(t).normalize()
+                        }
+                        val f = cur.toFile()
+                        if (f.isFile && f.length() > 0L)
+                            "-> ${cur.toFile().name} (${f.length()} bytes) ✓"
+                        else "broken chain"
+                    }
                 }
             }.getOrDefault("unreadable")
         )
-        append("etc/: ")
-        append(if (File(rootfs, "etc").isDirectory) "present" else "MISSING")
-        appendLine()
+        for (extra in listOf("bin/busybox", "bin/bash", "usr/bin/dash")) {
+            val f = File(rootfs, extra)
+            if (f.isFile) appendLine("$extra: ${f.length()} bytes")
+        }
         append("marker: ")
         append(File(linuxDir, ".distro").takeIf { it.exists() }?.readText()?.trim() ?: "none")
-        appendLine()
     }.trimEnd()
 
+    /** Generic boot test: /bin/sh must exist and resolve (through any number
+     *  of symlinks, including merged-usr dir links) to a real non-empty file.
+     *  Works for Alpine (busybox) and Ubuntu (dash) alike — do NOT test for
+     *  specific binaries like busybox, other distros don't ship them. */
     private fun healthReasonFor(base: File): String? {
-        val busybox = File(base, "bin/busybox")
-        if (!busybox.exists() || busybox.length() == 0L) return "bin/busybox missing or empty"
         val sh = File(base, "bin/sh")
-        val shOk = runCatching {
+        val shExists = runCatching {
             Files.exists(Paths.get(sh.absolutePath), LinkOption.NOFOLLOW_LINKS)
         }.getOrDefault(false)
-        if (!shOk) return "bin/sh missing"
+        if (!shExists) return "bin/sh missing"
+
+        val resolves = runCatching {
+            var cur = Paths.get(sh.absolutePath)
+            var hops = 0
+            while (Files.isSymbolicLink(cur) && hops++ < 8) {
+                val t = Files.readSymbolicLink(cur)
+                cur = if (t.isAbsolute)
+                    Paths.get(base.absolutePath, t.toString().trimStart('/'))
+                else cur.parent.resolve(t).normalize()
+            }
+            val f = cur.toFile()
+            f.isFile && f.length() > 0L
+        }.getOrDefault(false)
+        if (!resolves) return "/bin/sh does not resolve to a real binary"
         return null
     }
 
