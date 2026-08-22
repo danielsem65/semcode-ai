@@ -16,16 +16,29 @@ data class Project(
 )
 
 /**
- * Persistent chat projects — one JSON file per project under filesDir/projects.
- * Stores both the UI transcript and the API history so a conversation resumes
- * exactly where it stopped.
+ * Persistent chat projects — one JSON file per project.
+ * Lives in /storage/emulated/0/.semcode-ai/projects when storage is granted
+ * (survives clear-data/uninstall); falls back to private storage otherwise.
+ * Existing private projects are migrated once.
  */
-class ProjectStore(context: Context) {
+class ProjectStore(private val context: Context) {
 
-    private val dir: File = File(context.filesDir, "projects").apply { mkdirs() }
+    private val legacyDir = File(context.filesDir, "projects")
+
+    private fun dir(): File {
+        val home = Workspace.home(context) ?: return legacyDir.apply { mkdirs() }
+        val d = File(home, "projects").apply { mkdirs() }
+        if (legacyDir.exists()) {
+            legacyDir.listFiles { f -> f.extension == "json" }?.forEach { f ->
+                val dst = File(d, f.name)
+                if (!dst.exists()) runCatching { f.copyTo(dst) }
+            }
+        }
+        return d
+    }
 
     fun list(): List<Project> =
-        dir.listFiles { f -> f.extension == "json" }
+        dir().listFiles { f -> f.extension == "json" }
             ?.mapNotNull { f ->
                 runCatching {
                     val o = JSONObject(f.readText())
@@ -47,16 +60,16 @@ class ProjectStore(context: Context) {
         return id
     }
 
-    fun exists(id: String): Boolean = File(dir, "$id.json").exists()
+    fun exists(id: String): Boolean = File(dir(), "$id.json").exists()
 
     fun projectName(id: String): String =
         runCatching {
-            JSONObject(File(dir, "$id.json").readText()).optString("name", "New chat")
+            JSONObject(File(dir(), "$id.json").readText()).optString("name", "New chat")
         }.getOrDefault("New chat")
 
     fun rename(id: String, name: String) {
         if (name.isBlank()) return
-        val f = File(dir, "$id.json")
+        val f = File(dir(), "$id.json")
         if (!f.exists()) return
         runCatching {
             val o = JSONObject(f.readText())
@@ -66,13 +79,13 @@ class ProjectStore(context: Context) {
     }
 
     fun delete(id: String) {
-        File(dir, "$id.json").delete()
+        File(dir(), "$id.json").delete()
     }
 
     /** Atomic-ish save of transcript + API history. */
     fun save(id: String, name: String, messages: List<ChatMessage>, api: List<Msg>) {
-        val f = File(dir, "$id.json")
-        val tmp = File(dir, "$id.tmp")
+        val f = File(dir(), "$id.json")
+        val tmp = File(dir(), "$id.tmp")
         try {
             val prevName = if (f.exists()) runCatching {
                 JSONObject(f.readText()).optString("name")
@@ -119,7 +132,7 @@ class ProjectStore(context: Context) {
     }
 
     fun load(id: String): Pair<List<ChatMessage>, List<Msg>>? = runCatching {
-        val f = File(dir, "$id.json")
+        val f = File(dir(), "$id.json")
         if (!f.exists()) return null
         val o = JSONObject(f.readText())
 

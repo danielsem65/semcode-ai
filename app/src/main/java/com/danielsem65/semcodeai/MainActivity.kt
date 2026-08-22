@@ -46,6 +46,11 @@ class MainActivity : ComponentActivity() {
     private val notifPermission =
         registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { }
 
+    private val storagePermission =
+        registerForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+        ) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (android.os.Build.VERSION.SDK_INT >= 33 &&
@@ -53,6 +58,18 @@ class MainActivity : ComponentActivity() {
             android.content.pm.PackageManager.PERMISSION_GRANTED
         ) {
             notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+        // Legacy storage mode (targetSdk 28): classic runtime permissions
+        // unlock full shared-storage access.
+        if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            storagePermission.launch(
+                arrayOf(
+                    android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                    android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+                )
+            )
         }
         setContent {
             SemCodeTheme { App(vm) }

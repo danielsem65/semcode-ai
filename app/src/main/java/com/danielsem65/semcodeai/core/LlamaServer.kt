@@ -65,12 +65,16 @@ object LlamaServer {
             if (!src.canRead()) throw RuntimeException("Model file is not readable: $modelPath")
 
             // llama.cpp mmaps the model; mmap over /storage FUSE is unreliable and
-            // crashes the engine instantly. Copy into app-private storage first.
-            val localFile = if (src.absolutePath.startsWith(context.filesDir.absolutePath)) {
+            // crashes the engine instantly. Copy into real-filesystem storage first
+            // (durable .semcode-ai/models when available, private fallback).
+            val localFile = if (src.absolutePath.startsWith(context.filesDir.absolutePath) ||
+                src.absolutePath.startsWith(Workspace.HOME_ROOT)
+            ) {
                 src
             } else {
                 onProgress("copying model 0%")
-                val dstDir = File(context.filesDir, "models").apply { mkdirs() }
+                val dstDir = Workspace.home(context)?.let { File(it, "models") }
+                    ?: File(context.filesDir, "models").apply { mkdirs() }
                 val dst = File(dstDir, src.name)
                 if (!dst.exists() || dst.length() != src.length()) {
                     val tmp = File(dstDir, src.name + ".part")

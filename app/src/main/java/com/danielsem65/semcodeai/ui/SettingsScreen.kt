@@ -320,8 +320,9 @@ private fun DeviceModelSection() {
 
 @Composable
 private fun GgufBrowserDialog(onPick: (String) -> Unit, onClose: () -> Unit) {
+    val ctx = LocalContext.current
     var dir by rememberSaveable { mutableStateOf("/storage/emulated/0") }
-    val fullGranted = com.danielsem65.semcodeai.core.Workspace.isFullAvailable()
+    val fullGranted = com.danielsem65.semcodeai.core.Workspace.isFullAvailable(ctx)
 
     val entries = remember(dir) {
         runCatching {
@@ -456,8 +457,19 @@ private fun ModelField(vm: AppViewModel, p: com.danielsem65.semcodeai.ai.Provide
 private fun StorageCard(vm: AppViewModel) {
     val context = LocalContext.current
     val app = context.applicationContext as SemApp
-    val granted = Environment.isExternalStorageManager()
+    val granted = com.danielsem65.semcodeai.core.Workspace.isFullAvailable(context)
     var useFull by remember { mutableStateOf(app.settings.fullStorage && granted) }
+
+    val storageLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { ok ->
+        if (ok) {
+            useFull = true
+            app.settings.fullStorage = true
+            app.onWorkspaceChanged()
+            vm.refreshStatus()
+        }
+    }
 
     Card(
         Modifier
@@ -473,19 +485,19 @@ private fun StorageCard(vm: AppViewModel) {
                     .padding(top = 4.dp)
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text("Full device storage")
+                    Text("Keep files on device storage")
                     Text(
                         when {
-                            granted -> "/storage/emulated/0/semcode"
-                            else -> "Needs \"All files access\". Until then a private workspace is used."
+                            granted -> "/storage/emulated/0/.semcode-ai — survives app data clears"
+                            else -> "Needs storage permission. Until then a private workspace is used."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Switch(checked = useFull, onCheckedChange = { want ->
-                    if (want && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !granted) {
-                        openAllFilesAccess(context)
+                    if (want && !granted) {
+                        storageLauncher.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     } else {
                         useFull = want
                         app.settings.fullStorage = want
@@ -754,16 +766,3 @@ private fun LinuxCard(vm: AppViewModel) {
     }
 }
 
-internal fun openAllFilesAccess(context: android.content.Context) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
-    runCatching {
-        context.startActivity(
-            Intent(
-                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                Uri.parse("package:${context.packageName}")
-            )
-        )
-    }.onFailure {
-        context.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
-    }
-}

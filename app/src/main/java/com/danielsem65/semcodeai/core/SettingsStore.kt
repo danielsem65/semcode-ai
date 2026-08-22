@@ -29,8 +29,10 @@ class SettingsStore(context: Context) {
         com.danielsem65.semcodeai.ai.Providers.ALL.any { hasKeyFor(it.id) && !it.isLocal }
 
     // ----- storage mode -----
+    // Default ON: keep workspace/projects/models in /storage/emulated/0/.semcode-ai
+    // so they survive "clear app data" and uninstalls.
     var fullStorage: Boolean
-        get() = prefs.getBoolean(FULL_STORAGE, false)
+        get() = prefs.getBoolean(FULL_STORAGE, true)
         set(value) = prefs.edit().putBoolean(FULL_STORAGE, value).apply()
 
     /** When true, destructive tools wait for explicit user approval in chat. */

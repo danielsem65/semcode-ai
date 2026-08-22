@@ -11,9 +11,13 @@ android {
     defaultConfig {
         applicationId = "com.danielsem65.semcodeai"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 20
-        versionName = "2.5.1"
+
+        // Termux-style: targeting <=28 keeps the legacy SELinux domain where
+        // exec() from app storage is allowed (required for the proot Linux env)
+        // and enables classic full-storage permissions.
+        targetSdk = 28
+        versionCode = 21
+        versionName = "2.5.2"
     }
 
     buildTypes {
