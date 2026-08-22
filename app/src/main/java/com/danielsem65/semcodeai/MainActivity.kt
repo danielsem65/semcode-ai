@@ -5,7 +5,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Folder
@@ -74,7 +77,7 @@ private fun CrashDialog(report: String, onDismiss: () -> Unit, onClear: () -> Un
         onDismissRequest = onDismiss,
         title = { Text("The app crashed last time") },
         text = {
-            androidx.compose.foundation.verticalScroll(androidx.compose.foundation.rememberScrollState()) {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
                     report,
                     style = MaterialTheme.typography.bodySmall,

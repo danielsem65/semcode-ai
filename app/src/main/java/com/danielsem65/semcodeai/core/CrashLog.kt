@@ -17,7 +17,7 @@ object CrashLog {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             runCatching {
-                val dir = File(appCtx.filesDir)
+                val dir = appCtx.filesDir
                 File(dir, PREV).delete()
                 File(dir, LATEST).renameTo(File(dir, PREV))
                 val ts = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())

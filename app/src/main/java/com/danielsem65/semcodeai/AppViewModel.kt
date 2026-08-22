@@ -219,12 +219,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
             val reply: EngineReply = withContext(Dispatchers.IO) {
                 _liveText.value = ""
+                var r: EngineReply? = null
                 try {
                     // Throttle UI updates — appending per token would re-render
                     // the live bubble thousands of times and stall the app.
                     val sb = StringBuilder()
                     var lastFlush = 0L
-                    engine.chatStream(
+                    r = engine.chatStream(
                         systemPrompt(), apiHistory.toList(),
                         com.danielsem65.semcodeai.ai.Tools.all()
                     ) { delta ->
@@ -241,6 +242,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 } finally {
                     _liveText.value = ""
                 }
+                requireNotNull(r) { "no reply" }
             }
 
             if (reply.calls.isEmpty()) {
