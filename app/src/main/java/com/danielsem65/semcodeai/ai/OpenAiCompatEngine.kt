@@ -166,9 +166,12 @@ class OpenAiCompatEngine(
                         val delta = chunk.optJSONArray("choices")?.optJSONObject(0)
                             ?.optJSONObject("delta") ?: continue
 
-                        delta.optString("content", "").takeIf { it.isNotEmpty() }?.let {
-                            text.append(it)
-                            onDelta(it)
+                        // Strict string check: optString() turns JSON null into
+                        // the literal text "null" (org.json quirk).
+                        val c = delta.opt("content")
+                        if (c is String && c.isNotEmpty()) {
+                            text.append(c)
+                            onDelta(c)
                         }
 
                         val tcs = delta.optJSONArray("tool_calls") ?: continue
@@ -208,7 +211,8 @@ class OpenAiCompatEngine(
     // ---------------- shared parsing / errors ----------------
 
     private fun parseMessage(msg: JSONObject): EngineReply {
-        var text = msg.optString("content", "").takeIf { it.isNotBlank() }
+        val rawContent = msg.opt("content")
+        var text = (rawContent as? String)?.takeIf { it.isNotBlank() }
         val calls = mutableListOf<ToolCall>()
         val tc = msg.optJSONArray("tool_calls")
         if (tc != null) {
