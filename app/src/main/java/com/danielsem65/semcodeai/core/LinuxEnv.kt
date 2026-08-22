@@ -175,15 +175,15 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
 
             when (type) {
                 'L'.code.toByte() -> { // GNU long name
-                    val buf = ByteArray(size)
+                    val buf = ByteArray(size.toInt())
                     readFully(ins, buf)
-                    pendingLongName = String(buf, 0, size).trimEnd('\u0000')
+                    pendingLongName = String(buf, 0, buf.size).trimEnd('\u0000')
                     continue
                 }
                 'x'.code.toByte(), 'g'.code.toByte() -> { // PAX extended header
-                    val buf = ByteArray(size)
+                    val buf = ByteArray(size.toInt())
                     readFully(ins, buf)
-                    val text = String(buf, 0, size)
+                    val text = String(buf, 0, buf.size)
                     Regex("path=([^\\n]+)").find(text)?.let { pendingPaxPath = it.groupValues[1] }
                     continue
                 }
@@ -213,7 +213,7 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
                         FileOutputStream(outFile).use { copyExactly(ins, it, size) }
                         if (modeStr.isNotBlank()) {
                             val m = modeStr.trim('\u0000', ' ').toIntOrNull(8) ?: 0
-                            if (m and 0o111 != 0) outFile.setExecutable(true, false)
+                            if (m and 0b001_001_001 != 0) outFile.setExecutable(true, false)
                         }
                     }
                     else -> skipData(ins, size)
