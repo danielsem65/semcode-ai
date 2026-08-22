@@ -38,6 +38,11 @@ class SettingsStore(context: Context) {
         get() = prefs.getBoolean(ASK_BEFORE_CHANGES, false)
         set(value) = prefs.edit().putBoolean(ASK_BEFORE_CHANGES, value).apply()
 
+    // ----- on-device engine -----
+    var deviceModelPath: String
+        get() = prefs.getString(DEVICE_MODEL_PATH, "") ?: ""
+        set(value) = prefs.edit().putString(DEVICE_MODEL_PATH, value).apply()
+
     // ----- git hub -----
     var githubToken: String
         get() = prefs.getString(GITHUB_TOKEN, "") ?: ""
@@ -49,5 +54,6 @@ class SettingsStore(context: Context) {
         const val FULL_STORAGE = "full_storage"
         const val GITHUB_TOKEN = "github_token"
         const val ASK_BEFORE_CHANGES = "ask_before_changes"
+        const val DEVICE_MODEL_PATH = "device_model_path"
     }
 }

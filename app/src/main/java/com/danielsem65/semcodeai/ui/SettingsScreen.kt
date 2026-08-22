@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -50,6 +51,7 @@ import com.danielsem65.semcodeai.core.LinuxEnv
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 @Composable
 fun SettingsScreen(vm: AppViewModel) {
@@ -92,7 +94,7 @@ fun SettingsScreen(vm: AppViewModel) {
         GithubCard()
 
         Text(
-            "SemCode AI v2.1 · files + shell + Linux + GitHub agent · keys are stored only on this device.",
+            "SemCode AI v2.5 · on-device offline AI · files + shell + Linux + GitHub agent · keys are stored only on this device.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 16.dp, bottom = 24.dp)
@@ -144,16 +146,18 @@ private fun ProviderRow(vm: AppViewModel, p: com.danielsem65.semcodeai.ai.Provid
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp))
-            Text("Get a key → ${p.keyUrl.removePrefix("https://")}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.secondary,
-                modifier = Modifier
-                    .padding(top = 2.dp, bottom = 4.dp)
-                    .clickable {
-                        runCatching {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(p.keyUrl)))
-                        }
-                    })
+            if (p.keyUrl.isNotBlank()) {
+                Text("Get a key → ${p.keyUrl.removePrefix("https://")}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier
+                        .padding(top = 2.dp, bottom = 4.dp)
+                        .clickable {
+                            runCatching {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(p.keyUrl)))
+                            }
+                        })
+            }
 
             // ---- API key ----
             var testState by remember(p.id) { mutableStateOf("") }
@@ -204,6 +208,9 @@ private fun ProviderRow(vm: AppViewModel, p: com.danielsem65.semcodeai.ai.Provid
                 }
             }
 
+            // ---- on-device model file ----
+            if (p.id == "device") DeviceModelSection()
+
             // ---- model ----
             ModelField(vm, p)
 
@@ -217,6 +224,163 @@ private fun ProviderRow(vm: AppViewModel, p: com.danielsem65.semcodeai.ai.Provid
             }
         }
     }
+}
+
+@Composable
+private fun DeviceModelSection() {
+    val context = LocalContext.current
+    val settings = (context.applicationContext as SemApp).settings
+    val scope = rememberCoroutineScope()
+
+    var path by rememberSaveable { mutableStateOf(settings.deviceModelPath) }
+    var browsing by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var msg by remember { mutableStateOf("") }
+    var running by remember { mutableStateOf(com.danielsem65.semcodeai.core.LlamaServer.isRunning()) }
+
+    Column(Modifier.padding(top = 8.dp)) {
+        Text(
+            if (path.isBlank()) "No model selected — tap Browse and pick a .gguf file"
+            else "Model: ${path.substringAfterLast('/')}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row(verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(top = 6.dp)) {
+            OutlinedButton(onClick = { browsing = true }) { Text("Browse") }
+            Spacer(Modifier.width(8.dp))
+            Button(
+                enabled = path.isNotBlank() && !busy,
+                onClick = {
+                    busy = true; msg = ""
+                    scope.launch {
+                        msg = withContext(Dispatchers.IO) {
+                            runCatching {
+                                com.danielsem65.semcodeai.core.LlamaServer.ensureStarted(context, path)
+                                running = true
+                                "✓ model loaded — chat works offline now"
+                            }.getOrElse {
+                                running = false
+                                "✗ ${it.message?.take(300)}"
+                            }
+                        }
+                        busy = false
+                    }
+                }
+            ) { Text(if (busy) "Loading…" else if (running) "Reload" else "Load") }
+            if (running && !busy) {
+                TextButton(onClick = {
+                    com.danielsem65.semcodeai.core.LlamaServer.stop()
+                    running = false; msg = ""
+                }, modifier = Modifier.padding(start = 8.dp)) { Text("Stop") }
+            }
+            if (busy) CircularProgressIndicator(Modifier.padding(start = 10.dp), strokeWidth = 2.dp)
+        }
+        if (msg.isNotBlank()) {
+            Text(msg,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (msg.startsWith("✓")) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 4.dp))
+        }
+        if (!com.danielsem65.semcodeai.core.LlamaServer.isBinaryAvailable(context)) {
+            Text(
+                "This build doesn't include the engine binary yet — install the newest APK.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        } else if (msg.startsWith("✗")) {
+            Text(
+                com.danielsem65.semcodeai.core.LlamaServer.logTail(),
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                maxLines = 6,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
+    }
+
+    if (browsing) {
+        GgufBrowserDialog(
+            onPick = { picked ->
+                path = picked
+                settings.deviceModelPath = picked
+                running = false
+                msg = ""
+                browsing = false
+            },
+            onClose = { browsing = false }
+        )
+    }
+}
+
+@Composable
+private fun GgufBrowserDialog(onPick: (String) -> Unit, onClose: () -> Unit) {
+    var dir by rememberSaveable { mutableStateOf("/storage/emulated/0") }
+    val fullGranted = com.danielsem65.semcodeai.core.Workspace.isFullAvailable()
+
+    val entries = remember(dir) {
+        runCatching {
+            File(dir).listFiles()
+                ?.filter { it.isDirectory || it.extension.equals("gguf", ignoreCase = true) }
+                ?.sortedWith(compareBy({ !it.isDirectory }, { it.name.lowercase() }))
+                ?: emptyList()
+        }.getOrDefault(emptyList())
+    }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Pick a .gguf model", style = MaterialTheme.typography.titleSmall) },
+        text = {
+            Column {
+                if (!fullGranted) {
+                    Text(
+                        "Grant 'All files access' first (Storage card below), then reopen.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                Text("📂 $dir",
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                val parent = File(dir).parentFile
+                if (parent != null) {
+                    Text("↩ ..",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { dir = parent.absolutePath }
+                            .padding(vertical = 6.dp),
+                        color = MaterialTheme.colorScheme.secondary,
+                        style = MaterialTheme.typography.bodyMedium)
+                }
+                androidx.compose.foundation.lazy.LazyColumn(Modifier.height(320.dp)) {
+                    items(entries.size) { i ->
+                        val e = entries[i]
+                        Text(
+                            if (e.isDirectory) "\uD83D\uDCC1 ${e.name}"
+                            else "🧠 ${e.name}  (${e.length() / 1048576L} MB)",
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = fullGranted) {
+                                    if (e.isDirectory) dir = e.absolutePath
+                                    else onPick(e.absolutePath)
+                                }
+                                .padding(vertical = 8.dp)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onClose) { Text("Cancel") }
+        }
+    )
 }
 
 @Composable

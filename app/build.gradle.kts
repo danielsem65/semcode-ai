@@ -12,8 +12,8 @@ android {
         applicationId = "com.danielsem65.semcodeai"
         minSdk = 26
         targetSdk = 35
-        versionCode = 18
-        versionName = "2.4.3"
+        versionCode = 19
+        versionName = "2.5"
     }
 
     buildTypes {
@@ -41,7 +41,7 @@ android {
         }
         jniLibs {
             useLegacyPackaging = true
-            keepDebugSymbols.add("**/libproot.so")
+            keepDebugSymbols.addAll(listOf("**/libproot.so", "**/libllama-server.so"))
         }
     }
 }

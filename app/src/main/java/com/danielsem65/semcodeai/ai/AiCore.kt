@@ -88,6 +88,14 @@ object Providers {
             "https://ollama.com",
             "Offline models (gemma3, qwen3…) via Ollama on-device (Termux) or adb reverse. No key needed.",
             isLocal = true
+        ),
+        Provider(
+            "device", "On-device (offline)",
+            "http://127.0.0.1:${com.danielsem65.semcodeai.core.LlamaServer.PORT}/v1",
+            "local-model",
+            "",
+            "Runs a .gguf model entirely on this phone — no internet at all. Pick your model file in the section below.",
+            isLocal = true
         )
     )
 
