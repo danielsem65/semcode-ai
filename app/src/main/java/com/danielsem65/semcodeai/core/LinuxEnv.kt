@@ -178,6 +178,7 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
                     val buf = ByteArray(size.toInt())
                     readFully(ins, buf)
                     pendingLongName = String(buf, 0, buf.size).trimEnd('\u0000')
+                    skipPadding(ins, size)
                     continue
                 }
                 'x'.code.toByte(), 'g'.code.toByte() -> { // PAX extended header
@@ -185,42 +186,67 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
                     readFully(ins, buf)
                     val text = String(buf, 0, buf.size)
                     Regex("path=([^\\n]+)").find(text)?.let { pendingPaxPath = it.groupValues[1] }
+                    skipPadding(ins, size)
                     continue
                 }
             }
 
             val rel = entryName.removePrefix("./").trimStart('/')
-            if (rel.isBlank()) { skipData(ins, size); continue }
+            if (rel.isBlank()) { drainEntry(ins, size, null); continue }
             // Never let archive entries escape the rootfs.
             val safeRel = rel.split('/').filter { it != ".." }.joinToString("/")
             val outFile = File(dst, safeRel)
 
-            try {
-                when (type) {
-                    '5'.code.toByte() -> outFile.mkdirs()
-                    '2'.code.toByte() -> { // symlink
-                        outFile.parentFile?.mkdirs()
-                        outFile.delete()
-                        createSymLink(outFile, linkName)
-                    }
-                    '1'.code.toByte() -> { // hardlink → materialize as copy
-                        outFile.parentFile?.mkdirs()
-                        val src = File(dst, linkName.removePrefix("./").trimStart('/'))
-                        if (src.isFile) src.copyTo(outFile, overwrite = true)
-                    }
-                    '0'.code.toByte(), 0.toByte(), '7'.code.toByte() -> { // regular file
-                        outFile.parentFile?.mkdirs()
-                        FileOutputStream(outFile).use { copyExactly(ins, it, size) }
-                        if (modeStr.isNotBlank()) {
-                            val m = modeStr.trim('\u0000', ' ').toIntOrNull(8) ?: 0
-                            if (m and 0b001_001_001 != 0) outFile.setExecutable(true, false)
-                        }
-                    }
-                    else -> skipData(ins, size)
+            when (type) {
+                '5'.code.toByte() -> {
+                    drainEntry(ins, size, null)
+                    outFile.mkdirs()
                 }
-            } catch (_: Exception) {
-                skipData(ins, size)
+                '2'.code.toByte() -> { // symlink
+                    drainEntry(ins, size, null)
+                    outFile.parentFile?.mkdirs()
+                    outFile.delete()
+                    createSymLink(outFile, linkName)
+                }
+                '1'.code.toByte() -> { // hardlink → materialize as copy
+                    drainEntry(ins, size, null)
+                    outFile.parentFile?.mkdirs()
+                    val src = File(dst, linkName.removePrefix("./").trimStart('/'))
+                    if (src.isFile) src.copyTo(outFile, overwrite = true)
+                }
+                '0'.code.toByte(), 0.toByte(), '7'.code.toByte() -> { // regular file
+                    outFile.parentFile?.mkdirs()
+                    FileOutputStream(outFile).use { drainEntry(ins, size, it) }
+                    if (modeStr.isNotBlank()) {
+                        val m = modeStr.trim('\u0000', ' ').toIntOrNull(8) ?: 0
+                        if (m and 0b001_001_001 != 0) outFile.setExecutable(true, false)
+                    }
+                }
+                else -> drainEntry(ins, size, null)
             }
+        }
+    }
+
+    /** Reads an entry's payload (writing to out if given) and then skips the
+     *  512-byte block padding every tar data section is rounded up to.
+     *  Missing this desynced the whole archive after the first odd-sized file. */
+    private fun drainEntry(ins: java.io.InputStream, size: Long, out: FileOutputStream?) {
+        val buf = ByteArray(65536)
+        var remaining = size
+        while (remaining > 0) {
+            val n = ins.read(buf, 0, if (remaining < buf.size) remaining.toInt() else buf.size)
+            if (n <= 0) throw RuntimeException("unexpected end of archive")
+            out?.write(buf, 0, n)
+            remaining -= n
+        }
+        skipPadding(ins, size)
+    }
+
+    private fun skipPadding(ins: java.io.InputStream, size: Long) {
+        val pad = ((512 - (size % 512)) % 512).toInt()
+        if (pad > 0) {
+            val junk = ByteArray(pad)
+            readFully(ins, junk)
         }
     }
 
@@ -241,27 +267,6 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
         } else if (resolved.isFile) {
             resolved.copyTo(link, overwrite = true)
             link.setExecutable(resolved.canExecute(), false)
-        }
-    }
-
-    private fun copyExactly(ins: java.io.InputStream, out: FileOutputStream, size: Long) {
-        val buf = ByteArray(65536)
-        var remaining = size
-        while (remaining > 0) {
-            val n = ins.read(buf, 0, if (remaining < buf.size) remaining.toInt() else buf.size)
-            if (n <= 0) throw RuntimeException("unexpected end of archive")
-            out.write(buf, 0, n)
-            remaining -= n
-        }
-    }
-
-    private fun skipData(ins: java.io.InputStream, size: Long) {
-        var remaining = size
-        val buf = ByteArray(65536)
-        while (remaining > 0) {
-            val n = ins.read(buf, 0, if (remaining < buf.size) remaining.toInt() else buf.size)
-            if (n <= 0) break
-            remaining -= n
         }
     }
 
