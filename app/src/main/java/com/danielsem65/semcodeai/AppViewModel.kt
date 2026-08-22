@@ -647,7 +647,7 @@ Style: concise, practical, plain text. Use ``` fences for any code you show.
     }
 
     companion object {
-        private const val MAX_STEPS = 25
+        private const val MAX_STEPS = 30
         private const val LIVE_FLUSH_MS = 150L
         private const val COMPACT_ABOVE_CHARS = 60_000
         private const val COMPACT_KEEP = 10
