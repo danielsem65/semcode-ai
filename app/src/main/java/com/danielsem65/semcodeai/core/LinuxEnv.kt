@@ -51,11 +51,8 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
     fun healthCheck(): String? {
         val marker = File(linuxDir, ".distro")
         if (!marker.exists()) return "not installed"
-        val busybox = File(rootfs, "bin/busybox")
-        if (!busybox.exists() || busybox.length() == 0L) return "bin/busybox missing or empty"
-        if (!shExists()) return "bin/sh missing (broken symlinks)"
-        if (!File(rootfs, "etc").isDirectory) return "etc missing"
-        return null
+        val reason = healthReasonFor(rootfs) ?: return null
+        return reason
     }
 
     private fun needsRepair(): Boolean =
@@ -67,12 +64,42 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
         if (isInstalled()) File(linuxDir, ".distro").takeIf { it.exists() }?.readText()?.trim() ?: "Linux"
         else ""
 
-    private fun shExists(): Boolean = runCatching {
-        Files.exists(
-            Paths.get(rootfs.absolutePath, "bin", "sh"),
-            LinkOption.NOFOLLOW_LINKS
+    /** Human-readable facts about the install — shown in Settings so the user
+     *  (and we, remotely) can see exactly what is on disk and where. */
+    fun diagnose(): String = buildString {
+        appendLine("Path: ${rootfs.absolutePath}")
+        val bb = File(rootfs, "bin/busybox")
+        appendLine("busybox: " + if (bb.exists()) "${bb.length()} bytes" else "MISSING")
+        val shFile = File(rootfs, "bin/sh")
+        append("sh: ")
+        appendLine(
+            runCatching {
+                val p = Paths.get(shFile.absolutePath)
+                when {
+                    Files.isSymbolicLink(p) -> "symlink -> ${Files.readSymbolicLink(p)}"
+                    shFile.exists() -> "file (${shFile.length()} bytes)"
+                    else -> "MISSING"
+                }
+            }.getOrDefault("unreadable")
         )
-    }.getOrDefault(false)
+        append("etc/: ")
+        append(if (File(rootfs, "etc").isDirectory) "present" else "MISSING")
+        appendLine()
+        append("marker: ")
+        append(File(linuxDir, ".distro").takeIf { it.exists() }?.readText()?.trim() ?: "none")
+        appendLine()
+    }.trimEnd()
+
+    private fun healthReasonFor(base: File): String? {
+        val busybox = File(base, "bin/busybox")
+        if (!busybox.exists() || busybox.length() == 0L) return "bin/busybox missing or empty"
+        val sh = File(base, "bin/sh")
+        val shOk = runCatching {
+            Files.exists(Paths.get(sh.absolutePath), LinkOption.NOFOLLOW_LINKS)
+        }.getOrDefault(false)
+        if (!shOk) return "bin/sh missing"
+        return null
+    }
 
     // ---------------- install / repair ----------------
 
@@ -80,26 +107,42 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
      * Downloads + extracts the rootfs; onProgress runs on an arbitrary thread.
      * Safe to call when already installed (no-op) or when the existing install
      * is broken (wipes and reinstalls).
+     *
+     * Termux-style: extraction goes into a staging directory that is verified
+     * BEFORE it becomes the live rootfs via rename — a failed or partial
+     * install can never leave a broken environment behind.
      */
     suspend fun install(d: Distro, onProgress: (Int) -> Unit): Unit = withContext(Dispatchers.IO) {
         if (healthCheck() == null) return@withContext
         linuxDir.mkdirs()
-        rootfs.deleteRecursively()
-        rootfs.mkdirs()
+        val staging = File(linuxDir, "rootfs.staging")
+        staging.deleteRecursively()
+        staging.mkdirs()
 
         val tar = File(linuxDir, "${d.name}.tar.gz")
         download(d.url, tar, onProgress)
 
-        extractTarGz(tar, rootfs)
-        tar.delete()
+        try {
+            extractTarGz(tar, staging)
+        } finally {
+            tar.delete()
+        }
 
-        val reason = healthReasonIgnoringMarker()
+        val reason = healthReasonFor(staging)
         if (reason != null) {
+            staging.deleteRecursively()
             throw RuntimeException("rootfs extraction incomplete ($reason)")
         }
 
-        File(rootfs, "etc/resolv.conf").writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
-        File(rootfs, "etc/hosts").writeText("127.0.0.1 localhost\n")
+        File(staging, "etc/resolv.conf").writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
+        File(staging, "etc/hosts").writeText("127.0.0.1 localhost\n")
+
+        // Atomic swap: staging becomes the live rootfs only after passing checks.
+        rootfs.deleteRecursively()
+        if (!staging.renameTo(rootfs)) {
+            staging.copyRecursively(rootfs, overwrite = true)
+            staging.deleteRecursively()
+        }
         File(linuxDir, ".distro").writeText(d.label)
     }
 
@@ -115,13 +158,6 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
 
     /** True when a previous install exists but no longer boots a shell. */
     fun detectBroken(): Boolean = needsRepair()
-
-    private fun healthReasonIgnoringMarker(): String? {
-        val busybox = File(rootfs, "bin/busybox")
-        if (!busybox.exists() || busybox.length() == 0L) return "bin/busybox missing or empty"
-        if (!shExists()) return "bin/sh missing"
-        return null
-    }
 
     fun remove() {
         linuxDir.deleteRecursively()

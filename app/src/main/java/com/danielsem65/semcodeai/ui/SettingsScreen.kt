@@ -664,6 +664,7 @@ private fun LinuxCard(vm: AppViewModel) {
 
     var installed by remember { mutableStateOf(app.linuxEnv.installedLabel()) }
     var health by remember { mutableStateOf(app.linuxEnv.healthCheck()) }
+    var diag by remember { mutableStateOf("") }
     var selected by remember { mutableStateOf(LinuxEnv.Distro.ALPINE) }
     var busy by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(0) }
@@ -672,6 +673,7 @@ private fun LinuxCard(vm: AppViewModel) {
     fun refresh() {
         installed = app.linuxEnv.installedLabel()
         health = app.linuxEnv.healthCheck()
+        diag = if (installed.isNotBlank()) app.linuxEnv.diagnose() else ""
     }
 
     Card(
@@ -693,6 +695,15 @@ private fun LinuxCard(vm: AppViewModel) {
                 else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp)
             )
+
+            if (diag.isNotBlank()) {
+                Text(
+                    diag,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,

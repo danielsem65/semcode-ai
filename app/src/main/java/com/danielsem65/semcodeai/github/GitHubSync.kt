@@ -181,11 +181,12 @@ object GitHubSync {
             when {
                 resp.isSuccessful -> {
                     val j = runCatching { JSONObject(resp.body?.string() ?: "{}") }.getOrElse { return Tip.Error("bad response") }
-                    val sha = j.optString("sha", "")
-                    val tree = j.optJSONObject("commit")?.optJSONObject("commit")
-                        ?.optJSONObject("tree")?.optString("sha", "")
-                        ?: ""
-                    return if (sha.isBlank()) Tip.Error("branch response missing sha") else Tip.Found(sha, tree)
+                    // Branch API shape: { name, commit: { sha, commit: { tree: { sha } } } }
+                    val commitObj = j.optJSONObject("commit")
+                    val sha = commitObj?.optString("sha", "").orEmpty().ifBlank { j.optString("sha", "") }
+                    val tree = commitObj?.optJSONObject("commit")
+                        ?.optJSONObject("tree")?.optString("sha", "").orEmpty()
+                    return if (sha.isBlank()) Tip.Error("branch response missing commit.sha") else Tip.Found(sha, tree)
                 }
                 resp.code == 404 -> return Tip.Missing
                 else -> {
