@@ -4,14 +4,24 @@ import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Paths
+import java.util.zip.GZIPInputStream
 
 /**
  * Proot-based Linux environment (no root required).
  * proot is shipped as a "native library" so Android allows exec() from the
  * read-only nativeLibraryDir; a user-chosen distro rootfs is downloaded at
  * runtime and mounted with /workspace bound to the SemCode workspace.
+ *
+ * Extraction is pure Kotlin (GZIP + manual tar parser) — device toybox tar
+ * builds differ across OEMs and have been observed silently skipping symlinks,
+ * which leaves the rootfs without /bin/sh and proot unable to start a shell.
  */
 class LinuxEnv(private val context: Context, private val workspaceProvider: () -> File) {
 
@@ -25,35 +35,54 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
             "Ubuntu 22.04",
             "https://cdimage.ubuntu.com/ubuntu-base/releases/22.04/release/ubuntu-base-22.04.5-base-arm64.tar.gz",
             "~26 MB", "apt"
-        )
+        );
+
+        companion object {
+            fun fromLabel(l: String): Distro? = values().firstOrNull { it.label == l }
+        }
     }
 
     private val linuxDir get() = File(context.filesDir, "linux")
     private val rootfs get() = File(linuxDir, "rootfs")
 
-    /**
-     * Symlink-safe: guest /bin/sh is a symlink (-> /bin/busybox) whose target
-     * only exists inside the rootfs, so File.exists() would follow it on the
-     * HOST filesystem and report false. We check without following links, and
-     * fall back to the install marker.
-     */
-    fun isInstalled(): Boolean {
-        if (File(linuxDir, ".distro").exists() && File(rootfs, "etc").isDirectory) return true
-        return runCatching {
-            java.nio.file.Files.exists(
-                java.nio.file.Paths.get(rootfs.absolutePath, "bin", "sh"),
-                java.nio.file.LinkOption.NOFOLLOW_LINKS
-            )
-        }.getOrDefault(false)
+    // ---------------- health ----------------
+
+    /** Null when the environment can actually boot a shell; otherwise why not. */
+    fun healthCheck(): String? {
+        val marker = File(linuxDir, ".distro")
+        if (!marker.exists()) return "not installed"
+        val busybox = File(rootfs, "bin/busybox")
+        if (!busybox.exists() || busybox.length() == 0L) return "bin/busybox missing or empty"
+        if (!shExists()) return "bin/sh missing (broken symlinks)"
+        if (!File(rootfs, "etc").isDirectory) return "etc missing"
+        return null
     }
+
+    private fun needsRepair(): Boolean =
+        File(linuxDir, ".distro").exists() && healthCheck() != null
+
+    fun isInstalled(): Boolean = healthCheck() == null
 
     fun installedLabel(): String =
         if (isInstalled()) File(linuxDir, ".distro").takeIf { it.exists() }?.readText()?.trim() ?: "Linux"
         else ""
 
-    /** Downloads + extracts the rootfs; onProgress runs on an arbitrary thread. */
+    private fun shExists(): Boolean = runCatching {
+        Files.exists(
+            Paths.get(rootfs.absolutePath, "bin", "sh"),
+            LinkOption.NOFOLLOW_LINKS
+        )
+    }.getOrDefault(false)
+
+    // ---------------- install / repair ----------------
+
+    /**
+     * Downloads + extracts the rootfs; onProgress runs on an arbitrary thread.
+     * Safe to call when already installed (no-op) or when the existing install
+     * is broken (wipes and reinstalls).
+     */
     suspend fun install(d: Distro, onProgress: (Int) -> Unit): Unit = withContext(Dispatchers.IO) {
-        if (isInstalled()) return@withContext
+        if (healthCheck() == null) return@withContext
         linuxDir.mkdirs()
         rootfs.deleteRecursively()
         rootfs.mkdirs()
@@ -61,53 +90,203 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
         val tar = File(linuxDir, "${d.name}.tar.gz")
         download(d.url, tar, onProgress)
 
-        // 1st try: toybox tar with gzip. Some builds lack -z → gunzip fallback below.
-        var rc = runTar(listOf("-xzf", tar.path))
-        if (!symlinkSafeShExists()) {
-            rc = runCatching {
-                val plain = File(linuxDir, "${d.name}.tar")
-                if (!plain.exists()) {
-                    ProcessBuilder("/system/bin/toybox", "gzip", "-d", "-f", tar.path)
-                        .redirectErrorStream(true).start().waitFor()
-                }
-                if (plain.exists()) {
-                    val rc2 = runTar(listOf("-xf", plain.path))
-                    plain.delete()
-                    rc2
-                } else -1
-            }.getOrDefault(-1)
+        extractTarGz(tar, rootfs)
+        tar.delete()
+
+        val reason = healthReasonIgnoringMarker()
+        if (reason != null) {
+            throw RuntimeException("rootfs extraction incomplete ($reason)")
         }
-        if (tar.exists()) tar.delete()
 
-        if (!symlinkSafeShExists()) throw RuntimeException("extract failed (rc=$rc) — device toybox unsupported")
-
-        File(rootfs, "etc").mkdirs()
         File(rootfs, "etc/resolv.conf").writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
         File(rootfs, "etc/hosts").writeText("127.0.0.1 localhost\n")
         File(linuxDir, ".distro").writeText(d.label)
     }
 
-    private fun symlinkSafeShExists(): Boolean = runCatching {
-        java.nio.file.Files.exists(
-            java.nio.file.Paths.get(rootfs.absolutePath, "bin", "sh"),
-            java.nio.file.LinkOption.NOFOLLOW_LINKS
-        )
-    }.getOrDefault(false)
+    /** Marker exists but environment is unusable → wipe + fresh download. */
+    suspend fun repair(onProgress: (Int) -> Unit): Boolean = withContext(Dispatchers.IO) {
+        val label = File(linuxDir, ".distro").takeIf { it.exists() }?.readText()?.trim()
+        val d = Distro.values().firstOrNull { it.label == label } ?: Distro.ALPINE
+        if (healthCheck() == null) return@withContext false
+        runCatching { remove() }
+        install(d, onProgress)
+        true
+    }
 
-    private fun runTar(args: List<String>): Int =
-        try {
-            val p = ProcessBuilder(
-                "/system/bin/toybox", "tar", *args.toTypedArray(), "-C", rootfs.absolutePath
-            ).redirectErrorStream(true).start()
-            p.inputStream.bufferedReader().readText()
-            p.waitFor()
-        } catch (e: Exception) {
-            -1
-        }
+    /** True when a previous install exists but no longer boots a shell. */
+    fun detectBroken(): Boolean = needsRepair()
+
+    private fun healthReasonIgnoringMarker(): String? {
+        val busybox = File(rootfs, "bin/busybox")
+        if (!busybox.exists() || busybox.length() == 0L) return "bin/busybox missing or empty"
+        if (!shExists()) return "bin/sh missing"
+        return null
+    }
 
     fun remove() {
         linuxDir.deleteRecursively()
     }
+
+    // ---------------- pure-Kotlin tar.gz extractor ----------------
+
+    private fun extractTarGz(gz: File, dst: File) {
+        FileInputStream(gz).use { fin ->
+            val magic = ByteArray(2)
+            if (readFully(fin, magic) != 2 || magic[0] != 0x1f.toByte() || magic[1] != 0x8b.toByte()) {
+                throw RuntimeException("downloaded archive is not gzip (truncated download?)")
+            }
+        }
+        GZIPInputStream(FileInputStream(gz), 65536).use { gin ->
+            parseTar(gin, dst)
+        }
+    }
+
+    private fun readFully(ins: java.io.InputStream, buf: ByteArray, off: Int = 0, len: Int = buf.size - off): Int {
+        var total = 0
+        while (total < len) {
+            val n = ins.read(buf, off + total, len - total)
+            if (n <= 0) break
+            total += n
+        }
+        return total
+    }
+
+    private fun parseTar(ins: java.io.InputStream, dst: File) {
+        val header = ByteArray(512)
+        var pendingLongName: String? = null
+        var pendingPaxPath: String? = null
+
+        while (true) {
+            val got = readFully(ins, header)
+            if (got < 512) break
+            if (header.all { it == 0.toByte() }) break // end-of-archive blocks
+
+            val name = tarString(header, 0, 100)
+            val modeStr = tarString(header, 100, 8)
+            val size = tarSize(header, 124, 12)
+            val type = header[156]
+            val linkName = tarString(header, 157, 100)
+            val prefix = tarString(header, 345, 155)
+
+            var entryName = pendingLongName ?: pendingPaxPath
+                ?: (if (prefix.isNotBlank()) "$prefix/$name" else name)
+            pendingLongName = null
+            pendingPaxPath = null
+
+            when (type) {
+                'L'.code.toByte() -> { // GNU long name
+                    val buf = ByteArray(size)
+                    readFully(ins, buf)
+                    pendingLongName = String(buf, 0, size).trimEnd('\u0000')
+                    continue
+                }
+                'x'.code.toByte(), 'g'.code.toByte() -> { // PAX extended header
+                    val buf = ByteArray(size)
+                    readFully(ins, buf)
+                    val text = String(buf, 0, size)
+                    Regex("path=([^\\n]+)").find(text)?.let { pendingPaxPath = it.groupValues[1] }
+                    continue
+                }
+            }
+
+            val rel = entryName.removePrefix("./").trimStart('/')
+            if (rel.isBlank()) { skipData(ins, size); continue }
+            // Never let archive entries escape the rootfs.
+            val safeRel = rel.split('/').filter { it != ".." }.joinToString("/")
+            val outFile = File(dst, safeRel)
+
+            try {
+                when (type) {
+                    '5'.code.toByte() -> outFile.mkdirs()
+                    '2'.code.toByte() -> { // symlink
+                        outFile.parentFile?.mkdirs()
+                        outFile.delete()
+                        createSymLink(outFile, linkName)
+                    }
+                    '1'.code.toByte() -> { // hardlink → materialize as copy
+                        outFile.parentFile?.mkdirs()
+                        val src = File(dst, linkName.removePrefix("./").trimStart('/'))
+                        if (src.isFile) src.copyTo(outFile, overwrite = true)
+                    }
+                    '0'.code.toByte(), 0.toByte(), '7'.code.toByte() -> { // regular file
+                        outFile.parentFile?.mkdirs()
+                        FileOutputStream(outFile).use { copyExactly(ins, it, size) }
+                        if (modeStr.isNotBlank()) {
+                            val m = modeStr.trim('\u0000', ' ').toIntOrNull(8) ?: 0
+                            if (m and 0o111 != 0) outFile.setExecutable(true, false)
+                        }
+                    }
+                    else -> skipData(ins, size)
+                }
+            } catch (_: Exception) {
+                skipData(ins, size)
+            }
+        }
+    }
+
+    /** Symlink creation with a busybox-safe fallback: copying the target works
+     *  because busybox dispatches on argv[0], and directory links fall back to
+     *  a recursive copy. Guarantees /bin/sh exists even where symlink(2) fails. */
+    private fun createSymLink(link: File, rawTarget: String) {
+        val target = rawTarget.trim()
+        try {
+            Files.createSymbolicLink(Paths.get(link.absolutePath), Paths.get(target))
+            return
+        } catch (_: Exception) {
+        }
+        val resolved = if (target.startsWith("/")) File(rootfs, target.trimStart('/'))
+        else File(link.parentFile, target)
+        if (resolved.isDirectory) {
+            resolved.copyRecursively(link, overwrite = true)
+        } else if (resolved.isFile) {
+            resolved.copyTo(link, overwrite = true)
+            link.setExecutable(resolved.canExecute(), false)
+        }
+    }
+
+    private fun copyExactly(ins: java.io.InputStream, out: FileOutputStream, size: Long) {
+        val buf = ByteArray(65536)
+        var remaining = size
+        while (remaining > 0) {
+            val n = ins.read(buf, 0, if (remaining < buf.size) remaining.toInt() else buf.size)
+            if (n <= 0) throw RuntimeException("unexpected end of archive")
+            out.write(buf, 0, n)
+            remaining -= n
+        }
+    }
+
+    private fun skipData(ins: java.io.InputStream, size: Long) {
+        var remaining = size
+        val buf = ByteArray(65536)
+        while (remaining > 0) {
+            val n = ins.read(buf, 0, if (remaining < buf.size) remaining.toInt() else buf.size)
+            if (n <= 0) break
+            remaining -= n
+        }
+    }
+
+    private fun tarString(h: ByteArray, off: Int, len: Int): String {
+        var end = off
+        val max = off + len
+        while (end < max && h[end] != 0.toByte()) end++
+        return String(h, off, end - off)
+    }
+
+    private fun tarSize(h: ByteArray, off: Int, len: Int): Long {
+        var v = 0L
+        var started = false
+        for (i in off until off + len) {
+            val c = h[i].toInt() and 0xFF
+            if (c == 0 || c == ' '.code) {
+                if (started) break else continue
+            }
+            started = true
+            v = v * 8 + (c - '0'.code)
+        }
+        return v
+    }
+
+    // ---------------- boot ----------------
 
     /**
      * Command that boots a persistent guest shell.
@@ -127,6 +306,12 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
             "-b", "${workspace.absolutePath}:/workspace",
             "/bin/sh"
         )
+    }
+
+    /** Extra environment for the guest shell process (proot + guest). */
+    fun shellEnv(): Map<String, String> {
+        val tmp = File(linuxDir, "tmp").apply { mkdirs() }
+        return mapOf("PROOT_TMP_DIR" to tmp.absolutePath)
     }
 
     private fun download(url: String, dst: File, onProgress: (Int) -> Unit) {
@@ -155,6 +340,9 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
                                 onProgress(pct)
                             }
                         }
+                    }
+                    if (total > 0 && read != total) {
+                        throw RuntimeException("download truncated ($read of $total bytes)")
                     }
                 }
             }

@@ -511,6 +511,25 @@ Style: concise, practical, plain text. Use ``` fences for any code you show.
             "SemCode terminal ready — Android toybox sh.\n" +
                 "Type help for commands. Install a full Linux env in Settings for apt/git/python."
         )
+        // Self-heal: a previously installed but broken Linux env is silently
+        // re-downloaded in the background (Alpine is ~4 MB).
+        viewModelScope.launch(Dispatchers.IO) {
+            val app = getApplication<SemApp>()
+            if (app.linuxEnv.detectBroken()) {
+                appendTerm("Linux environment looks broken — repairing in background…")
+                runCatching {
+                    app.invalidateLinuxSession()
+                    app.linuxEnv.repair { }
+                }.onSuccess { ok ->
+                    appendTerm(
+                        if (ok) "Linux environment repaired ✓ — Shell tab → Linux."
+                        else "Linux repair finished with warnings — reinstall in Settings if the shell misbehaves."
+                    )
+                }.onFailure {
+                    appendTerm("Linux repair failed: ${it.message?.take(120)} — Settings → Reinstall.")
+                }
+            }
+        }
     }
 
     fun linuxInstalled(): Boolean = getApplication<SemApp>().linuxEnv.isInstalled()

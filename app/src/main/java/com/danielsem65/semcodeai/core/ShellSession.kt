@@ -29,6 +29,9 @@ class ShellSession(
     @Volatile private var token = ""
     @Volatile private var alive = false
 
+    /** Consecutive sessions that died without completing a command. */
+    private var deathStreak = 0
+
     private val lock = Any()
 
     var cwd: String = startDir.path
@@ -90,14 +93,26 @@ class ShellSession(
             writer?.flush()
         }
 
-        val finished = signal.tryAcquire(timeoutSec.coerceIn(1, 600), TimeUnit.SECONDS)
+        val finished = waitForFinish(timeoutSec.coerceIn(1, 600))
         token = ""
         val out = synchronized(buffer) { buffer.toString() }
 
         if (!finished) {
-            kill() // command wedged the shell — restart fresh rather than hang forever
-            return "TIMEOUT after ${timeoutSec}s — session was reset. Partial output:\n${out.take(4000)}"
+            val p = process
+            val died = p != null && !p.isAlive
+            kill() // wedged or dead — restart fresh rather than hang forever
+            return if (died) {
+                deathStreak++
+                val rc = runCatching { p!!.exitValue() }.getOrDefault(-1)
+                val hint = if (deathStreak >= 2)
+                    "\n[The guest shell keeps dying — reinstall the Linux environment in Settings.]"
+                else ""
+                "[guest shell exited rc=$rc]\n${out.take(4000).ifBlank { "(no output)" }}$hint"
+            } else {
+                "TIMEOUT after ${timeoutSec}s — session was reset. Partial output:\n${out.take(4000)}"
+            }
         }
+        deathStreak = 0
 
         val marker = out.lineSequence().lastOrNull { it.contains(done) } ?: ""
         val rc = Regex("rc=(-?\\d+)").find(marker)?.groupValues?.get(1) ?: "?"
@@ -105,6 +120,22 @@ class ShellSession(
 
         val body = out.lineSequence().filter { !it.contains(done) }.joinToString("\n").trimEnd()
         return (body.ifBlank { "(no output)" }) + "\n[rc=$rc cwd=$cwd]"
+    }
+
+    /** Waits for the command token, but bails out early if the shell process
+     *  dies (e.g. proot can't exec /bin/sh) instead of burning the timeout. */
+    private fun waitForFinish(timeoutSec: Long): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutSec * 1000
+        while (System.currentTimeMillis() < deadline) {
+            if (signal.tryAcquire(150, TimeUnit.MILLISECONDS)) return true
+            val p = process ?: return false
+            if (!p.isAlive) {
+                // Give the reader thread a beat to drain final output.
+                Thread.sleep(250)
+                return false
+            }
+        }
+        return false
     }
 
     /** Kill current command/session. */

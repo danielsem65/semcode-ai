@@ -663,10 +663,16 @@ private fun LinuxCard(vm: AppViewModel) {
     val main = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
 
     var installed by remember { mutableStateOf(app.linuxEnv.installedLabel()) }
+    var health by remember { mutableStateOf(app.linuxEnv.healthCheck()) }
     var selected by remember { mutableStateOf(LinuxEnv.Distro.ALPINE) }
     var busy by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(0) }
     var msg by remember { mutableStateOf("") }
+
+    fun refresh() {
+        installed = app.linuxEnv.installedLabel()
+        health = app.linuxEnv.healthCheck()
+    }
 
     Card(
         Modifier
@@ -676,65 +682,61 @@ private fun LinuxCard(vm: AppViewModel) {
         Column(Modifier.padding(14.dp)) {
             Text("Linux environment", style = MaterialTheme.typography.titleMedium)
             Text(
-                if (installed.isNotBlank()) "Installed: $installed — real apt/apk, git, python3 in the terminal and for the AI."
-                else "Optional. Adds a full Linux distro (via proot, no root): apt/apk packages, git, python3. The AI can use it too.",
+                when {
+                    installed.isBlank() ->
+                        "Optional. Adds a full Linux distro (via proot, no root): apt/apk packages, git, python3. The AI can use it too."
+                    health != null -> "Installed: $installed — but BROKEN ($health). Reinstall to fix it."
+                    else -> "Installed: $installed ✓ healthy — real apt/apk, git, python3 in the terminal and for the AI."
+                },
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = if (health != null && installed.isNotBlank()) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp)
             )
 
-            if (installed.isBlank()) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(top = 10.dp)
-                ) {
-                    for (d in LinuxEnv.Distro.values()) {
-                        Button(
-                            onClick = { selected = d },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (selected == d) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.surfaceContainerHigh
-                            ),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            modifier = Modifier.padding(end = 8.dp)
-                        ) {
-                            Text("${d.label} (${d.sizeHint})",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (selected == d) MaterialTheme.colorScheme.onPrimary
-                                else MaterialTheme.colorScheme.onSurface)
-                        }
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(top = 10.dp)) {
-                    Button(onClick = {
-                        busy = true; msg = "downloading…"; progress = 0
-                        scope.launch {
-                            try {
-                                app.linuxEnv.install(selected) { pct -> main.post { progress = pct } }
-                                installed = app.linuxEnv.installedLabel()
-                                msg = "✓ $installed ready — open the Shell tab and tap Linux"
-                            } catch (e: Exception) {
-                                msg = "✗ ${e.message?.take(160)}"
-                            }
-                            busy = false
-                        }
-                    }, enabled = !busy) { Text("Install") }
-                    if (busy) {
-                        Text("$progress%",
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(top = 10.dp)
+            ) {
+                for (d in LinuxEnv.Distro.values()) {
+                    Button(
+                        onClick = { selected = d },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (selected == d) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.surfaceContainerHigh
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.padding(end = 8.dp)
+                    ) {
+                        Text("${d.label} (${d.sizeHint})",
                             style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.padding(start = 10.dp))
-                        LinearProgressIndicator(
-                            progress = { progress / 100f },
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(start = 8.dp)
-                        )
+                            color = if (selected == d) MaterialTheme.colorScheme.onPrimary
+                            else MaterialTheme.colorScheme.onSurface)
                     }
                 }
-            } else {
-                Row(verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(top = 10.dp)) {
+            }
+
+            fun installFresh(label: String) {
+                busy = true; msg = label; progress = 0
+                scope.launch {
+                    try {
+                        app.invalidateLinuxSession()
+                        app.linuxEnv.install(selected) { pct -> main.post { progress = pct } }
+                        refresh()
+                        msg = "✓ $installed ready — open the Shell tab and tap Linux"
+                    } catch (e: Exception) {
+                        refresh()
+                        msg = "✗ ${e.message?.take(160)}"
+                    }
+                    busy = false
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(top = 10.dp)) {
+                if (installed.isBlank()) {
+                    Button(onClick = { installFresh("downloading…") }, enabled = !busy) { Text("Install") }
+                } else {
                     OutlinedButton(onClick = {
                         busy = true; msg = ""
                         scope.launch {
@@ -742,15 +744,35 @@ private fun LinuxCard(vm: AppViewModel) {
                                 app.invalidateLinuxSession()
                                 app.linuxEnv.remove()
                             }
-                            installed = ""
+                            refresh()
                             vm.refreshStatus()
                             busy = false
                         }
                     }, enabled = !busy) { Text("Remove") }
-                    Text("Shell tab → Linux to switch into it.",
+                    if (health != null) {
+                        Button(
+                            onClick = { installFresh("repairing…") },
+                            enabled = !busy,
+                            modifier = Modifier.padding(start = 10.dp)
+                        ) { Text("Reinstall") }
+                    }
+                    Text(
+                        "Shell tab → Linux to switch into it.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 10.dp)
+                    )
+                }
+                if (busy) {
+                    Text("$progress%",
+                        style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.padding(start = 10.dp))
+                    LinearProgressIndicator(
+                        progress = { progress / 100f },
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(start = 8.dp)
+                    )
                 }
             }
             if (msg.isNotBlank()) {

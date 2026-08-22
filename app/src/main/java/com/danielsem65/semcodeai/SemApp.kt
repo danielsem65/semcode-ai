@@ -73,9 +73,11 @@ class SemApp : Application() {
 
     val projectStore: ProjectStore by lazy { ProjectStore(this) }
 
-    /** Persistent guest shell inside proot; created on first use after install. */
+    /** Persistent guest shell inside proot; created on first use after install.
+     *  Refuses to boot a broken environment with an actionable message. */
     fun linuxShell(): ShellSession {
-        check(linuxEnv.isInstalled()) { "Linux environment is not installed" }
+        val bad = linuxEnv.healthCheck()
+        check(bad == null) { "Linux environment unusable ($bad) — Settings → Linux environment → Reinstall." }
         return synchronized(this) {
             linuxShellField ?: ShellSession(
                 File("/"),
@@ -85,7 +87,7 @@ class SemApp : Application() {
                     "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                     "TMPDIR" to "/tmp",
                     "LANG" to "C.UTF-8"
-                )
+                ) + linuxEnv.shellEnv()
             ).also { linuxShellField = it }
         }
     }
