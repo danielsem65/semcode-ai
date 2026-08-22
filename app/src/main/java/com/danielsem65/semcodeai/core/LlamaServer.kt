@@ -138,13 +138,13 @@ object LlamaServer {
                 val log = logTail().take(400)
                 throw RuntimeException(
                     when {
-                        exitCode == 139 || exitCode == 135 ->
-                            "The engine crashed while loading (signal $exitCode). " +
-                                "This build may be incompatible — report this."
+                        exitCode >= 128 ->
+                            "The engine was killed by the system (signal ${exitCode - 128}). " +
+                                "This engine build is incompatible with this phone — an updated build should fix it."
                         exitCode == 137 || exitCode == 9 ->
                             "The system killed the engine — out of memory. Use a smaller .gguf."
                         log.isBlank() ->
-                            "The engine exited silently (code $exitCode) before loading the model."
+                            "The engine exited (code $exitCode) before loading the model."
                         else -> "The model did not load in time. Log:\n$log"
                     }
                 )

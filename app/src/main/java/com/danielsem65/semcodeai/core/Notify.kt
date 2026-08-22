@@ -15,7 +15,7 @@ import com.danielsem65.semcodeai.MainActivity
 
 object Notify {
 
-    private const val CHANNEL = "agent_runs"
+    const val CHANNEL = "agent_runs"
 
     fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return

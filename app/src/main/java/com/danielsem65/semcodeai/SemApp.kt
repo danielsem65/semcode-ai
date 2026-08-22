@@ -27,6 +27,7 @@ class SemApp : Application() {
 
     private val runLock = Any()
     private var activeRuns = 0
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     fun runStarted() {
         synchronized(runLock) {
@@ -40,8 +41,18 @@ class SemApp : Application() {
     fun runEnded() {
         synchronized(runLock) {
             if (activeRuns > 0) activeRuns--
+            // Don't stop instantly: a just-started service still has to reach
+            // startForeground() or Android throws ForegroundServiceDidNotStart.
+            // Very short runs (instant errors) would race it — delay the stop
+            // and re-check that nothing started meanwhile.
             if (activeRuns == 0) {
-                stopService(Intent(this, com.danielsem65.semcodeai.core.AgentService::class.java))
+                mainHandler.postDelayed({
+                    synchronized(runLock) {
+                        if (activeRuns == 0) {
+                            stopService(Intent(this@SemApp, com.danielsem65.semcodeai.core.AgentService::class.java))
+                        }
+                    }
+                }, 3000)
             }
         }
     }
