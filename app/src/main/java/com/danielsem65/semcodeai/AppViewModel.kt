@@ -20,7 +20,8 @@ data class ChatMessage(
     val text: String,
     val isTool: Boolean = false,
     val isError: Boolean = false,
-    val proposalId: String? = null
+    val proposalId: String? = null,
+    val id: String = java.util.UUID.randomUUID().toString()
 ) {
     enum class Role { USER, MODEL }
 }
@@ -219,10 +220,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val reply: EngineReply = withContext(Dispatchers.IO) {
                 _liveText.value = ""
                 try {
+                    // Throttle UI updates — appending per token would re-render
+                    // the live bubble thousands of times and stall the app.
+                    val sb = StringBuilder()
+                    var lastFlush = 0L
                     engine.chatStream(
                         systemPrompt(), apiHistory.toList(),
                         com.danielsem65.semcodeai.ai.Tools.all()
-                    ) { delta -> _liveText.value += delta }
+                    ) { delta ->
+                        synchronized(sb) {
+                            sb.append(delta)
+                            val now = android.os.SystemClock.elapsedRealtime()
+                            if (now - lastFlush >= LIVE_FLUSH_MS) {
+                                lastFlush = now
+                                _liveText.value = sb.toString()
+                            }
+                        }
+                    }
+                    _liveText.value = sb.toString()
                 } finally {
                     _liveText.value = ""
                 }
@@ -556,6 +571,7 @@ Style: concise, practical, plain text. Use ``` fences for any code you show.
 
     companion object {
         private const val MAX_STEPS = 25
+        private const val LIVE_FLUSH_MS = 150L
         private const val COMPACT_ABOVE_CHARS = 60_000
         private const val COMPACT_KEEP = 10
 

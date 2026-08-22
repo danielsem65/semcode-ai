@@ -68,11 +68,56 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+private fun CrashDialog(report: String, onDismiss: () -> Unit, onClear: () -> Unit) {
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("The app crashed last time") },
+        text = {
+            androidx.compose.foundation.verticalScroll(androidx.compose.foundation.rememberScrollState()) {
+                Text(
+                    report,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                )
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = {
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(report))
+                onDismiss()
+            }) { Text("Copy & close") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onClear) { Text("Clear") }
+        }
+    )
+}
+
+@Composable
 private fun App(vm: AppViewModel) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val holder = rememberSaveableStateHolder()
+
+    // Show last crash report once per cold start, if there is one
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var crashReport by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf(
+            com.danielsem65.semcodeai.core.CrashLog.latest(ctx)
+        )
+    }
+    if (crashReport != null) {
+        CrashDialog(
+            report = crashReport!!,
+            onDismiss = { crashReport = null },
+            onClear = {
+                com.danielsem65.semcodeai.core.CrashLog.clear(ctx)
+                crashReport = null
+            }
+        )
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,

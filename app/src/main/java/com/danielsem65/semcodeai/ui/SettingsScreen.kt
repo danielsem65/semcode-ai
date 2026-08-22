@@ -83,6 +83,8 @@ fun SettingsScreen(vm: AppViewModel) {
 
         SafetyCard(vm, app.settings)
 
+        DiagnosticsCard()
+
         LinuxCard(vm)
 
         GithubCard()
@@ -391,6 +393,52 @@ private fun GithubCard() {
                     else MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(start = 10.dp)
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticsCard() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var report by rememberSaveable { mutableStateOf(
+        com.danielsem65.semcodeai.core.CrashLog.latest(ctx) ?: ""
+    ) }
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+
+    Card(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp)
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text("Diagnostics", style = MaterialTheme.typography.titleSmall)
+            if (report.isBlank()) {
+                Text(
+                    "No crash reports. If the app ever crashes, the report will appear here to copy.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Text(
+                    report.take(1200),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    maxLines = 10,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 6.dp)
+                )
+                Row {
+                    TextButton(onClick = {
+                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(report))
+                    }) { Text("Copy full report") }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = {
+                        com.danielsem65.semcodeai.core.CrashLog.clear(ctx)
+                        report = ""
+                    }) { Text("Clear") }
+                }
             }
         }
     }

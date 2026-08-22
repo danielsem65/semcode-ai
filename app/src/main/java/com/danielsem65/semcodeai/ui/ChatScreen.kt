@@ -45,6 +45,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.danielsem65.semcodeai.AppViewModel
 import com.danielsem65.semcodeai.ChatMessage
 
@@ -119,7 +120,7 @@ fun ChatScreen(
             if (messages.isEmpty()) {
                 item { WelcomeCard(onOpenSettings) }
             }
-            items(messages, key = { it.hashCode() }) { msg ->
+            items(messages, key = { it.id }) { msg ->
                 Bubble(
                     msg,
                     awaiting = msg.proposalId != null && pending.containsKey(msg.proposalId),
@@ -135,12 +136,15 @@ fun ChatScreen(
                             tonalElevation = 2.dp,
                             modifier = Modifier.widthIn(max = 330.dp)
                         ) {
-                            SelectionContainer {
-                                MarkdownText(
-                                    liveText,
-                                    Modifier.padding(horizontal = 13.dp, vertical = 9.dp)
-                                )
-                            }
+                            // Plain text while streaming — full markdown parsing
+                            // per update would freeze the app on long replies.
+                            Text(
+                                liveText.takeLast(4000),
+                                style = MaterialTheme.typography.bodyMedium,
+                                lineHeight = 20.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(horizontal = 13.dp, vertical = 9.dp)
+                            )
                         }
                     }
                 }
@@ -234,7 +238,7 @@ private fun Bubble(
 ) {
     val isUser = msg.role == ChatMessage.Role.USER
     val clipboard = LocalClipboardManager.current
-    var copied by remember(msg.hashCode()) { mutableStateOf(false) }
+    var copied by remember(msg.id) { mutableStateOf(false) }
 
     Box(Modifier.fillMaxWidth(), contentAlignment = if (isUser) Alignment.CenterEnd else Alignment.CenterStart) {
         Column(horizontalAlignment = if (isUser) Alignment.End else Alignment.Start) {

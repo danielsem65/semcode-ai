@@ -97,6 +97,7 @@ class SemApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        com.danielsem65.semcodeai.core.CrashLog.install(this)
         settings = SettingsStore(this)
     }
 }
