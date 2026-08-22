@@ -222,6 +222,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         activeEngine = engine
         stopRequested.set(false)
         var steps = 0
+        var failStreak = 0
+        var lastFailSig = ""
 
         while (steps < MAX_STEPS) {
             if (stopRequested.get()) {
@@ -277,6 +279,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val result = dispatch(call.name, call.argsJson)
                 emitResult(shorten(result))
                 apiHistory += Msg.ToolResult(call.id, call.name, result.take(20_000))
+
+                // Loop guard: the same failing call three times in a row means
+                // the model is stuck — cut it off instead of burning all steps.
+                if (result.startsWith("ERROR")) {
+                    val sig = "${call.name}:${call.argsJson}"
+                    if (sig == lastFailSig) failStreak++ else { failStreak = 1; lastFailSig = sig }
+                    if (failStreak >= 3) {
+                        emitModel(
+                            "**Stopped: `${call.name}` keeps failing with identical arguments.**\n\n" +
+                                "Last error: ${result.take(300)}\n\n" +
+                                "I paused here so we don't loop. Tell me how to proceed."
+                        )
+                        return
+                    }
+                } else {
+                    failStreak = 0
+                    lastFailSig = ""
+                }
             }
         }
         if (!stopRequested.get()) {
@@ -309,7 +329,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         else fileOps.execute(name, args)
                 }
             } catch (e: Exception) {
-                "ERROR: ${e.message}"
+                // Small models repeat a failing call verbatim unless the error
+                // tells them exactly what went wrong and how to fix it.
+                val required = runCatching {
+                    com.danielsem65.semcodeai.ai.Tools.all()
+                        .firstOrNull { it.name == name }?.parameters
+                        ?.optJSONArray("required")
+                        ?.let { r -> (0 until r.length()).map { r.optString(it) } }
+                }.getOrNull().orEmpty()
+                buildString {
+                    append("ERROR in $name: ${e.message ?: "call failed"}. ")
+                    if (required.isEmpty()) {
+                        append("Check your arguments are valid JSON with the correct keys. ")
+                    } else {
+                        append("Required argument(s): ${required.joinToString(", ")}. ")
+                        append(
+                            "Call again as {\"name\": \"$name\", \"arguments\": {" +
+                                required.joinToString(", ") { "\"$it\": \"...\"" } + "}}. "
+                        )
+                    }
+                    append("Fix the arguments — do NOT repeat the identical call.")
+                }
             }
         }
     }

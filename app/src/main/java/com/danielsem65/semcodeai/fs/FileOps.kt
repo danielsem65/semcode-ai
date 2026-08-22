@@ -23,7 +23,7 @@ class FileOps(private val rootProvider: () -> File) {
 
     fun execute(name: String, args: JSONObject): String = try {
         when (name) {
-            "list_files" -> listFiles(args.getString("path"))
+            "list_files" -> listFiles(args.optString("path", ".").ifBlank { "." })
             "read_file" -> readFile(args.getString("path"))
             "write_file" -> writeFile(args.getString("path"), args.optString("content", ""))
             "edit_file" -> editFile(
