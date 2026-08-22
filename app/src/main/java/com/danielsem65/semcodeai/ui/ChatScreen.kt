@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -156,7 +157,9 @@ fun ChatScreen(
                         modifier = Modifier.padding(start = 4.dp, top = 2.dp)
                     ) {
                         CircularProgressIndicator(
-                            modifier = Modifier.padding(end = 10.dp),
+                            modifier = Modifier
+                                .padding(end = 8.dp)
+                                .size(14.dp),
                             strokeWidth = 2.dp,
                             color = MaterialTheme.colorScheme.primary
                         )

@@ -12,8 +12,8 @@ android {
         applicationId = "com.danielsem65.semcodeai"
         minSdk = 26
         targetSdk = 35
-        versionCode = 17
-        versionName = "2.4.2"
+        versionCode = 18
+        versionName = "2.4.3"
     }
 
     buildTypes {
