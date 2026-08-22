@@ -300,6 +300,49 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
         for (dl in deferredLinks) {
             createSymLink(dl.outFile, dl.linkTarget, dst)
         }
+
+        // Android FUSE silently ignores File.setExecutable(); proot needs
+        // /bin/sh (and other executables) to actually have +x.  A best-effort
+        // chmod after extraction is the only reliable way to get the bit set.
+        forceExecBit(dst)
+    }
+
+    /**
+     * Walk the extracted rootfs and chmod +x every regular file whose
+     * tar mode indicated any user-execute bit.  Also force +x on known
+     * critical paths so proot can always find /bin/sh.
+     *
+     * Falls back to Runtime.exec("chmod") which works even when
+     * File.setExecutable() is a no-op on FUSE.
+     */
+    private fun forceExecBit(root: File) {
+        // Android's toybox chmod works on FUSE paths; use it via the full
+        // system path so it's found even if the app's PATH is stripped.
+        val chmodCandidates = listOf("/system/bin/chmod", "/system/xbin/chmod", "chmod")
+        val chmodBin = chmodCandidates.firstOrNull { File(it).exists() }
+
+        if (chmodBin != null) {
+            Runtime.getRuntime()
+                .exec(arrayOf(chmodBin, "-R", "u+x", root.absolutePath))
+                .waitFor()
+        } else {
+            // Last resort: Java API (often a no-op on FUSE, but better than nothing).
+            root.walkTopDown().filter { it.isFile }.forEach { it.setExecutable(true, false) }
+        }
+
+        // Belt-and-suspenders: explicitly chmod the files proot MUST see.
+        for (critical in listOf("bin/sh", "bin/busybox", "usr/bin/env")) {
+            val f = File(root, critical)
+            if (f.isFile) {
+                if (chmodBin != null) {
+                    Runtime.getRuntime()
+                        .exec(arrayOf(chmodBin, "755", f.absolutePath))
+                        .waitFor()
+                } else {
+                    f.setExecutable(true, false)
+                }
+            }
+        }
     }
 
     /** Reads an entry's payload (writing to out if given) and then skips the
