@@ -44,22 +44,34 @@ class OpenAiCompatEngine(
                 is Msg.User -> messages.put(
                     JSONObject().put("role", "user").put("content", m.text))
                 is Msg.AssistantText -> messages.put(
-                    JSONObject().put("role", "assistant").put("content", m.text))
-                is Msg.ToolUse -> messages.put(
-                    JSONObject()
-                        .put("role", "assistant")
-                        .put("tool_calls", JSONArray().put(
-                            JSONObject()
-                                .put("id", m.id)
-                                .put("type", "function")
-                                .put("function", JSONObject()
-                                    .put("name", m.name)
-                                    .put("arguments", m.argsJson)))))
+                    JSONObject().put("role", "assistant")
+                        // Some upstreams reject missing/null content outright.
+                        .put("content", m.text.ifBlank { "(ok)" }))
+                is Msg.ToolUse -> {
+                    // arguments must be a valid JSON *string* per the OpenAI
+                    // schema; anything else makes strict upstreams 400.
+                    val cleanArgs = if (m.argsJson.isNotBlank() &&
+                        runCatching { org.json.JSONTokener(m.argsJson).nextValue() }.getOrNull()
+                            is JSONObject
+                    ) m.argsJson else "{}"
+                    messages.put(
+                        JSONObject()
+                            .put("role", "assistant")
+                            .put("content", "")
+                            .put("tool_calls", JSONArray().put(
+                                JSONObject()
+                                    .put("id", m.id)
+                                    .put("type", "function")
+                                    .put("function", JSONObject()
+                                        .put("name", m.name)
+                                        .put("arguments", cleanArgs)))))
+                }
                 is Msg.ToolResult -> messages.put(
                     JSONObject()
                         .put("role", "tool")
                         .put("tool_call_id", m.id)
-                        .put("content", m.result))
+                        // Empty tool outputs are rejected by some backends.
+                        .put("content", m.result.ifBlank { "(no output)" }))
             }
         }
         return messages
