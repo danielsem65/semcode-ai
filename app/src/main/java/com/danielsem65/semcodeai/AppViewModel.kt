@@ -397,7 +397,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 "github_status" -> GitHubSync.status(fileOps, token, args.getString("path"))
                 "github_push" -> GitHubSync.push(
                     fileOps, token, args.getString("path"),
-                    args.optString("message", "Update from SemCode AI").ifBlank { "Update from SemCode AI" }
+                    args.optString("message", "Update from SemCode AI").ifBlank { "Update from SemCode AI" },
+                    args.optBoolean("force", false)
                 )
                 "github_pull" -> GitHubSync.pull(fileOps, token, args.getString("path"))
                 "github_create_repo" -> GitHubSync.createRepo(token, args.getString("name"), args.optBoolean("private", false))

@@ -37,7 +37,7 @@ object Tools {
                 "repo" to S, "path" to S, required = listOf("repo")),
             t("github_status", "Show sync info of a cloned project: repo, branch, last pushed commit, file count.",
                 "path" to S, required = listOf("path")),
-            t("github_push", "Commit ALL files in the project folder to GitHub as one snapshot commit on the synced branch.",
+            t("github_push", "Commit ALL files in the project folder to GitHub as one snapshot commit on the synced branch. Optional boolean 'force': true overwrites the remote branch when a normal push is rejected because the remote moved (prefer github_pull first).",
                 "path" to S, "message" to S, required = listOf("path", "message")),
             t("github_pull", "Re-download the latest version of the repo over the local project folder (local changes are overwritten).",
                 "path" to S, required = listOf("path")),

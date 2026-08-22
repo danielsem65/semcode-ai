@@ -71,8 +71,13 @@ object GitHubSync {
     /**
      * Snapshot-push every local file as one commit on the synced branch.
      * Produces a normal commit visible on GitHub.
+     *
+     * Robust against the classic "422 not fast forward": the remote tip is
+     * re-read for every attempt; transient API errors are NOT mistaken for
+     * an empty repo; races retry with the fresh tip (up to 3 times); and an
+     * explicit force flag can overwrite the remote when the user asks.
      */
-    fun push(ops: FileOps, token: String, pathInput: String, message: String): String {
+    fun push(ops: FileOps, token: String, pathInput: String, message: String, force: Boolean = false): String {
         if (token.isBlank()) return "ERROR: no GitHub token saved. Add one in Settings → GitHub."
         val dir = ops.resolve(pathInput)
         if (!dir.isDirectory) return "ERROR: not a folder: ${ops.rel(dir)}"
@@ -83,71 +88,124 @@ object GitHubSync {
         if (files.isEmpty()) return "ERROR: nothing to push — folder is empty."
         if (files.size > MAX_FILES) return "ERROR: ${files.size} files exceeds the $MAX_FILES-file limit for snapshot push."
 
-        // Base commit/tree (may be an empty repo).
-        var baseSha = ""
-        var baseTree = ""
-        val branchesJson = tryOrNull { api("GET", "/repos/${m.slug}/branches/${m.branch}", token, null) }
-        if (branchesJson == null) {
-            // Repo might be empty (no commits yet) or missing. Verify repo exists:
-            tryOrNull { api("GET", "/repos/${m.slug}", token, null) }
-                ?: return "ERROR: repo ${m.slug} not found (or token lacks access)."
-        } else {
-            baseSha = branchesJson.optString("sha", "")
-            baseTree = branchesJson.optJSONObject("commit")?.optString("tree_sha", "") ?: ""
-        }
+        var lastError = ""
+        for (attempt in 1..3) {
+            // Fresh remote state each attempt. Only 404 means "branch absent";
+            // every other failure aborts instead of faking an empty repo.
+            val tip = getBranchTip(token, m.slug, m.branch)
+            val baseSha: String
+            val baseTree: String
+            when (tip) {
+                is Tip.Error -> return "ERROR: cannot read ${m.slug}@${m.branch} — ${tip.msg}"
+                is Tip.Missing -> { baseSha = ""; baseTree = "" }
+                is Tip.Found -> { baseSha = tip.sha; baseTree = tip.treeSha }
+            }
 
-        // 1) blobs
-        val treeEntries = JSONArray()
-        var pushed = 0
-        for (f in files) {
-            val relPath = f.relativeTo(dir).invariantSeparatorsPath
-            val bytes = f.readBytes()
-            val blobBody = JSONObject()
-                .put("content", Base64.getEncoder().encodeToString(bytes))
-                .put("encoding", "base64")
-            val blob = api("POST", "/repos/${m.slug}/git/blobs", token, blobBody)
-            treeEntries.put(
-                JSONObject()
-                    .put("path", relPath)
-                    .put("mode", "100644")
-                    .put("type", "blob")
-                    .put("sha", blob.getString("sha"))
-            )
-            pushed++
-        }
-
-        // 2) tree
-        val treeBody = JSONObject().put("tree", treeEntries)
-        if (baseTree.isNotBlank()) treeBody.put("base_tree", baseTree)
-        val tree = api("POST", "/repos/${m.slug}/git/trees", token, treeBody)
-
-        // 3) commit
-        val commitBody = JSONObject()
-            .put("message", message)
-            .put("tree", tree.getString("sha"))
-        if (baseSha.isNotBlank()) commitBody.put("parents", JSONArray().put(baseSha))
-        val commit = api("POST", "/repos/${m.slug}/git/commits", token, commitBody)
-
-        // 4) ref
-        val newSha = commit.getString("sha")
-        if (baseSha.isNotBlank()) {
-            api("PATCH", "/repos/${m.slug}/git/refs/heads/${m.branch}", token,
-                JSONObject().put("sha", newSha).put("force", false))
-        } else {
             try {
-                api("POST", "/repos/${m.slug}/git/refs", token,
-                    JSONObject().put("ref", "refs/heads/${m.branch}").put("sha", newSha))
+                // 1) blobs
+                val treeEntries = JSONArray()
+                var pushed = 0
+                for (f in files) {
+                    val relPath = f.relativeTo(dir).invariantSeparatorsPath
+                    val bytes = f.readBytes()
+                    val blobBody = JSONObject()
+                        .put("content", Base64.getEncoder().encodeToString(bytes))
+                        .put("encoding", "base64")
+                    val blob = api("POST", "/repos/${m.slug}/git/blobs", token, blobBody)
+                    treeEntries.put(
+                        JSONObject()
+                            .put("path", relPath)
+                            .put("mode", "100644")
+                            .put("type", "blob")
+                            .put("sha", blob.getString("sha"))
+                    )
+                    pushed++
+                }
+
+                // 2) tree (rebuilt per attempt so base_tree always matches the parent)
+                val treeBody = JSONObject().put("tree", treeEntries)
+                if (baseTree.isNotBlank()) treeBody.put("base_tree", baseTree)
+                val tree = api("POST", "/repos/${m.slug}/git/trees", token, treeBody)
+
+                // 3) commit
+                val commitBody = JSONObject()
+                    .put("message", message)
+                    .put("tree", tree.getString("sha"))
+                if (baseSha.isNotBlank()) commitBody.put("parents", JSONArray().put(baseSha))
+                val commit = api("POST", "/repos/${m.slug}/git/commits", token, commitBody)
+
+                // 4) ref
+                val newSha = commit.getString("sha")
+                if (baseSha.isNotBlank()) {
+                    updateRef(token, m.slug, m.branch, newSha, force = force && attempt == 3)
+                } else {
+                    try {
+                        api("POST", "/repos/${m.slug}/git/refs", token,
+                            JSONObject().put("ref", "refs/heads/${m.branch}").put("sha", newSha))
+                    } catch (e: Exception) {
+                        // Branch appeared meanwhile (or race) — retry reads it properly.
+                        throw RefConflict("ref create rejected: ${e.message?.take(120)}")
+                    }
+                }
+
+                writeMeta(dir, m.slug, m.branch, newSha)
+                m = readMeta(dir) ?: m
+                return "OK: pushed $pushed files → ${m.slug}@${m.branch}\nCommit: $newSha\n${message.take(100)}"
+            } catch (e: RefConflict) {
+                lastError = e.message ?: "conflict"
+                continue
             } catch (e: Exception) {
-                if (!e.message.orEmpty().contains("422"))
-                    throw e
-                api("PATCH", "/repos/${m.slug}/git/refs/heads/${m.branch}", token,
-                    JSONObject().put("sha", newSha).put("force", false))
+                lastError = e.message ?: e.toString()
+                break
             }
         }
 
-        writeMeta(dir, m.slug, m.branch, newSha)
-        m = readMeta(dir) ?: m
-        return "OK: pushed $pushed files → ${m.slug}@${m.branch}\nCommit: $newSha\n${message.take(100)}"
+        return buildString {
+            append("ERROR: push failed — $lastError\n")
+            append("The remote branch moved while pushing (edited on github.com or another device?).\n")
+            append("Fix: github_pull to take the remote version first, or ask me to push again with force=true to overwrite the remote.")
+        }
+    }
+
+    private sealed class Tip {
+        class Found(val sha: String, val treeSha: String) : Tip()
+        object Missing : Tip()
+        class Error(val msg: String) : Tip()
+    }
+
+    private class RefConflict(msg: String) : RuntimeException(msg)
+
+    private fun getBranchTip(token: String, slug: String, branch: String): Tip {
+        val req = requestBuilder("GET", "/repos/$slug/branches/$branch", token, null).build()
+        client.newCall(req).execute().use { resp ->
+            when {
+                resp.isSuccessful -> {
+                    val j = runCatching { JSONObject(resp.body?.string() ?: "{}") }.getOrElse { return Tip.Error("bad response") }
+                    val sha = j.optString("sha", "")
+                    val tree = j.optJSONObject("commit")?.optJSONObject("commit")
+                        ?.optJSONObject("tree")?.optString("sha", "")
+                        ?: ""
+                    return if (sha.isBlank()) Tip.Error("branch response missing sha") else Tip.Found(sha, tree)
+                }
+                resp.code == 404 -> return Tip.Missing
+                else -> {
+                    val msg = runCatching { JSONObject(resp.body?.string() ?: "{}").optString("message") }.getOrDefault("")
+                    return Tip.Error("HTTP ${resp.code} ${msg.take(120)}")
+                }
+            }
+        }
+    }
+
+    private fun updateRef(token: String, slug: String, branch: String, newSha: String, force: Boolean) {
+        try {
+            api("PATCH", "/repos/$slug/git/refs/heads/$branch", token,
+                JSONObject().put("sha", newSha).put("force", force))
+        } catch (e: Exception) {
+            val msg = e.message.orEmpty()
+            if (!force && msg.contains("fast", ignoreCase = true)) throw RefConflict("non-fast-forward")
+            if (msg.contains("422")) throw RefConflict(msg)
+            throw e
+        }
     }
 
     fun createRepo(token: String, name: String, isPrivate: Boolean): String {
@@ -295,6 +353,4 @@ object GitHubSync {
             return if (text.isBlank()) JSONObject() else runCatching { JSONObject(text) }.getOrElse { JSONObject() }
         }
     }
-
-    private inline fun <T> tryOrNull(block: () -> T): T? = runCatching(block).getOrNull()
 }
