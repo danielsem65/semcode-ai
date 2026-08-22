@@ -215,10 +215,16 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
         return total
     }
 
+    private data class DeferredLink(val outFile: File, val linkTarget: String)
+
     private fun parseTar(ins: java.io.InputStream, dst: File) {
         val header = ByteArray(512)
         var pendingLongName: String? = null
         var pendingPaxPath: String? = null
+        // Buffer symlinks so they are resolved AFTER all regular files exist on disk.
+        // On Android FUSE symlink(2) always fails; the fallback copies the target file,
+        // which only works if the target has already been extracted.
+        val deferredLinks = mutableListOf<DeferredLink>()
 
         while (true) {
             val got = readFully(ins, header)
@@ -266,11 +272,11 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
                     drainEntry(ins, size, null)
                     outFile.mkdirs()
                 }
-                '2'.code.toByte() -> { // symlink
+                '2'.code.toByte() -> { // symlink — defer to second pass
                     drainEntry(ins, size, null)
                     outFile.parentFile?.mkdirs()
                     outFile.delete()
-                    createSymLink(outFile, linkName)
+                    deferredLinks.add(DeferredLink(outFile, linkName))
                 }
                 '1'.code.toByte() -> { // hardlink → materialize as copy
                     drainEntry(ins, size, null)
@@ -288,6 +294,11 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
                 }
                 else -> drainEntry(ins, size, null)
             }
+        }
+
+        // Second pass: create symlinks (or copy fallbacks) now that all files exist.
+        for (dl in deferredLinks) {
+            createSymLink(dl.outFile, dl.linkTarget, dst)
         }
     }
 
@@ -316,15 +327,22 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
 
     /** Symlink creation with a busybox-safe fallback: copying the target works
      *  because busybox dispatches on argv[0], and directory links fall back to
-     *  a recursive copy. Guarantees /bin/sh exists even where symlink(2) fails. */
-    private fun createSymLink(link: File, rawTarget: String) {
+     *  a recursive copy. Guarantees /bin/sh exists even where symlink(2) fails.
+     *
+     *  @param extractRoot the directory we are extracting INTO (staging or live rootfs).
+     *                     Absolute symlink targets resolve against this, NOT the live rootfs,
+     *                     because during install() the live rootfs may not exist yet. */
+    private fun createSymLink(link: File, rawTarget: String, extractRoot: File = rootfs) {
         val target = rawTarget.trim()
+        // Try real symlink first.
         try {
             Files.createSymbolicLink(Paths.get(link.absolutePath), Paths.get(target))
             return
         } catch (_: Exception) {
         }
-        val resolved = if (target.startsWith("/")) File(rootfs, target.trimStart('/'))
+        // FUSE / older Android / broken SELinux: symlink(2) fails.
+        // Resolve against the extraction root, copy the target into place.
+        val resolved = if (target.startsWith("/")) File(extractRoot, target.trimStart('/'))
         else File(link.parentFile, target)
         if (resolved.isDirectory) {
             resolved.copyRecursively(link, overwrite = true)
