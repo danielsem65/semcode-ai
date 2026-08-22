@@ -178,28 +178,28 @@ class OpenAiCompatEngine(
                         for (i in 0 until tcs.length()) {
                             val tc = tcs.optJSONObject(i) ?: continue
                             val idx = tc.optInt("index", i)
+                            val fn = tc.optJSONObject("function")
                             val acc = slots.getOrPut(idx) {
-                                val fn = tc.optJSONObject("function")
                                 ToolAcc(
-                                    id = tc.optString("id", "call_$idx"),
-                                    name = fn?.optString("name", "") ?: "",
-                                    args = StringBuilder(fn?.optString("arguments", "") ?: "")
+                                    id = sstr(tc, "id").ifBlank { "call_$idx" },
+                                    name = sstr(fn, "name"),
+                                    args = StringBuilder(sstr(fn, "arguments"))
                                 )
                             }
-                            tc.optString("id", "").takeIf { it.isNotEmpty() }?.let { acc.id = it }
-                            tc.optJSONObject("function")?.optString("name", "")?.takeIf { it.isNotEmpty() }
-                                ?.let { acc.name = it }
-                            tc.optJSONObject("function")?.optString("arguments", "")?.takeIf { it.isNotEmpty() }
-                                ?.let { acc.args.append(it) }
+                            sstr(tc, "id").takeIf { it.isNotEmpty() }?.let { acc.id = it }
+                            fn?.let { f ->
+                                sstr(f, "name").takeIf { it.isNotEmpty() }?.let { acc.name = it }
+                                sstr(f, "arguments").takeIf { it.isNotEmpty() }?.let { acc.args.append(it) }
+                            }
                         }
                     }
                 }
 
                 val calls = slots.toSortedMap().values.mapNotNull { acc ->
-                    if (acc.name.isBlank()) null
+                    if (acc.name.isBlank() || acc.name == "null") null
                     else ToolCall(acc.id, acc.name, acc.args.toString().ifBlank { "{}" })
                 }
-                return EngineReply(text.toString().ifBlank { null }, calls)
+                return EngineReply(text.toString().ifBlank { null }, calls.filter { it.id != "null" })
             }
         } catch (e: IOException) {
             throw IOException("stream interrupted", e)
@@ -219,15 +219,24 @@ class OpenAiCompatEngine(
             for (i in 0 until tc.length()) {
                 val c = tc.optJSONObject(i) ?: continue
                 val fn = c.optJSONObject("function") ?: continue
+                val name = sstr(fn, "name")
+                if (name.isBlank() || name == "null") continue
                 calls += ToolCall(
-                    id = c.optString("id", "call_$i"),
-                    name = fn.optString("name"),
-                    argsJson = fn.optString("arguments", "{}").ifBlank { "{}" }
+                    id = sstr(c, "id").ifBlank { "call_$i" },
+                    name = name,
+                    argsJson = sstr(fn, "arguments").ifBlank { "{}" }
                 )
             }
         }
         if (text == null && calls.isEmpty()) throw RuntimeException("Provider returned empty content.")
-        return EngineReply(text, calls.filter { it.name.isNotBlank() })
+        return EngineReply(text, calls)
+    }
+
+    /** org.json's optString returns the literal "null" for JSON null values —
+     *  this returns "" instead, and only when the value is truly a string. */
+    private fun sstr(o: JSONObject?, key: String): String {
+        val v = o?.opt(key) ?: return ""
+        return v as? String ?: ""
     }
 
     override fun listModels(): List<String> {
