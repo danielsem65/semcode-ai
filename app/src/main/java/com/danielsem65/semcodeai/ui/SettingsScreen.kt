@@ -256,7 +256,9 @@ private fun DeviceModelSection() {
                     scope.launch {
                         msg = withContext(Dispatchers.IO) {
                             runCatching {
-                                com.danielsem65.semcodeai.core.LlamaServer.ensureStarted(context, path)
+                                com.danielsem65.semcodeai.core.LlamaServer.ensureStarted(
+                                    context, path
+                                ) { p -> msg = p }
                                 running = true
                                 "✓ model loaded — chat works offline now"
                             }.getOrElse {

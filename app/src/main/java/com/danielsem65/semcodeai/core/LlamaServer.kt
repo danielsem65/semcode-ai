@@ -38,8 +38,11 @@ object LlamaServer {
 
     fun modelInUse(): String = currentModel ?: ""
 
-    /** Starts (or restarts) the server with the given .gguf and waits until healthy. */
-    fun ensureStarted(context: Context, modelPath: String) {
+    /**
+     * Starts (or restarts) the server with the given .gguf and waits until healthy.
+     * onProgress receives human-readable status ("copying model 42%", "loading…").
+     */
+    fun ensureStarted(context: Context, modelPath: String, onProgress: (String) -> Unit = {}) {
         synchronized(lock) {
             val bin = binaryFile(context)
             if (!bin.exists())
@@ -57,13 +60,48 @@ object LlamaServer {
 
             stopInternal()
 
-            val f = File(modelPath)
-            if (!f.exists()) throw RuntimeException("Model file not found: $modelPath")
+            val src = File(modelPath)
+            if (!src.exists()) throw RuntimeException("Model file not found: $modelPath")
+            if (!src.canRead()) throw RuntimeException("Model file is not readable: $modelPath")
 
+            // llama.cpp mmaps the model; mmap over /storage FUSE is unreliable and
+            // crashes the engine instantly. Copy into app-private storage first.
+            val localFile = if (src.absolutePath.startsWith(context.filesDir.absolutePath)) {
+                src
+            } else {
+                onProgress("copying model 0%")
+                val dstDir = File(context.filesDir, "models").apply { mkdirs() }
+                val dst = File(dstDir, src.name)
+                if (!dst.exists() || dst.length() != src.length()) {
+                    val tmp = File(dstDir, src.name + ".part")
+                    src.inputStream().use { input ->
+                        tmp.outputStream().use { out ->
+                            val buf = ByteArray(1 shl 23) // 8 MB chunks
+                            var copied = 0L
+                            val total = src.length()
+                            while (true) {
+                                val n = input.read(buf)
+                                if (n < 0) break
+                                out.write(buf, 0, n)
+                                copied += n
+                                val pct = if (total > 0) (copied * 100 / total).toInt() else 100
+                                onProgress("copying model $pct%")
+                            }
+                        }
+                    }
+                    if (!tmp.renameTo(dst)) {
+                        tmp.copyTo(dst, overwrite = true)
+                        tmp.delete()
+                    }
+                }
+                dst
+            }
+
+            onProgress("loading model…")
             synchronized(logLines) { logLines.clear() }
             val pb = ProcessBuilder(
                 bin.absolutePath,
-                "-m", f.absolutePath,
+                "-m", localFile.absolutePath,
                 "--host", "127.0.0.1",
                 "--port", PORT.toString(),
                 "-c", CTX_SIZE.toString()
@@ -91,10 +129,20 @@ object LlamaServer {
             }.apply { isDaemon = true; start() }
 
             if (!awaitHealthy(180_000)) {
+                val exitCode = runCatching { proc.exitValue() }.getOrElse { -1 }
                 stopInternal()
+                val log = logTail().take(400)
                 throw RuntimeException(
-                    "The model did not load in time (or ran out of memory). " +
-                        "Try a smaller .gguf (1–3B, Q4). Log:\n${logTail().take(400)}"
+                    when {
+                        exitCode == 139 || exitCode == 135 ->
+                            "The engine crashed while loading (signal $exitCode). " +
+                                "This build may be incompatible — report this."
+                        exitCode == 137 || exitCode == 9 ->
+                            "The system killed the engine — out of memory. Use a smaller .gguf."
+                        log.isBlank() ->
+                            "The engine exited silently (code $exitCode) before loading the model."
+                        else -> "The model did not load in time. Log:\n$log"
+                    }
                 )
             }
         }

@@ -208,10 +208,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             if (modelPath.isBlank()) throw RuntimeException(
                 "No on-device model selected. Settings → On-device (offline) → Browse → pick a .gguf file."
             )
-            _stepText.value = "loading model…"
+            _stepText.value = "preparing model…"
             com.danielsem65.semcodeai.core.LlamaServer.ensureStarted(
                 getApplication(), modelPath
-            )
+            ) { progress -> _stepText.value = progress }
             com.danielsem65.semcodeai.ai.OpenAiCompatEngine(
                 "http://127.0.0.1:${com.danielsem65.semcodeai.core.LlamaServer.PORT}/v1",
                 "none", "local-model", isLocal = true
