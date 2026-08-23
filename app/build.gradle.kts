@@ -57,8 +57,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.compose.ui:ui")
-    // Explicit: TextFieldValue lives here; relying on transitive resolution
-    // broke BasicTextField's value-based overloads on CI.
+    // Pinned explicitly so text APIs never depend on transitive resolution.
     implementation("androidx.compose.ui:ui-text")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.ui:ui-tooling-preview")

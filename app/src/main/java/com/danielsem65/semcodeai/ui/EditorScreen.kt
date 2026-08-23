@@ -172,12 +172,13 @@ fun EditorScreen(path: String, onClose: (changed: Boolean) -> Unit) {
                 )
             }
 
-            Row(Modifier.fillMaxSize()) {
+            Row(
+                Modifier.fillMaxSize().verticalScroll(scroll)
+                    .padding(top = 4.dp, bottom = 32.dp)
+            ) {
                 Column(
                     Modifier
                         .width(52.dp)
-                        .fillMaxHeight()
-                        .verticalScroll(scroll)
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                         .padding(vertical = 8.dp)
                 ) {
@@ -195,26 +196,35 @@ fun EditorScreen(path: String, onClose: (changed: Boolean) -> Unit) {
                         )
                     }
                 }
-                val fieldModifier = if (wrap)
-                    Modifier.weight(1f).fillMaxHeight().verticalScroll(scroll)
-                        .padding(horizontal = 8.dp, vertical = 8.dp)
-                else
-                    Modifier.weight(1f).fillMaxHeight().verticalScroll(scroll)
-                        .horizontalScroll(hScroll)
-                        .padding(horizontal = 8.dp, vertical = 8.dp)
-                BasicTextField(
-                    value = text,
-                    onValueChange = { setBody(it) },
-                    softWrap = wrap,
-                    textStyle = TextStyle(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = EDITOR_FONT,
-                        lineHeight = EDITOR_LINE_HEIGHT_SP.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    ),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    modifier = fieldModifier
-                )
+                if (wrap) {
+                    BasicTextField(
+                        value = text,
+                        onValueChange = { setBody(it) },
+                        textStyle = TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = EDITOR_FONT,
+                            lineHeight = EDITOR_LINE_HEIGHT_SP.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.weight(1f).padding(horizontal = 8.dp, vertical = 8.dp)
+                    )
+                } else {
+                    Row(Modifier.weight(1f).horizontalScroll(hScroll)) {
+                        BasicTextField(
+                            value = text,
+                            onValueChange = { setBody(it) },
+                            textStyle = TextStyle(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = EDITOR_FONT,
+                                lineHeight = EDITOR_LINE_HEIGHT_SP.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            ),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            modifier = Modifier.padding(start = 8.dp, end = 48.dp, top = 8.dp, bottom = 8.dp)
+                        )
+                    }
+                }
             }
         }
 
