@@ -27,6 +27,15 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".TextEditActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".HtmlPreviewActivity"
+            android:exported="false" />
+
         <service
             android:name=".core.AgentService"
             android:exported="false"

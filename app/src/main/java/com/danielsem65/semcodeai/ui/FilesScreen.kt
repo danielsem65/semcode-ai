@@ -95,8 +95,30 @@ fun FilesScreen() {
     var clipboard by remember { mutableStateOf<Pair<File, Boolean>?>(null) } // second = cut
     var refresh by remember { mutableStateOf(0) }
     var dialog by remember { mutableStateOf<FD?>(null) }
-    var editorFile by remember { mutableStateOf<File?>(null) }
-    var previewFile by remember { mutableStateOf<File?>(null) }
+
+    // Refresh when returning from editor/preview activities.
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) refresh++
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
+
+    fun openEntry(entry: File) {
+        val path = entry.absolutePath
+        when {
+            entry.isDirectory -> dir = entry
+            isHtml(entry) -> context.startActivity(
+                android.content.Intent(context, com.danielsem65.semcodeai.HtmlPreviewActivity::class.java)
+                    .putExtra("path", path))
+            isTextFile(entry) -> context.startActivity(
+                android.content.Intent(context, com.danielsem65.semcodeai.TextEditActivity::class.java)
+                    .putExtra("path", path))
+            else -> dialog = FD.Info(entry)
+        }
+    }
 
     val entries = remember(dir, refresh) {
         dir.listFiles()?.sortedWith(
@@ -148,14 +170,7 @@ fun FilesScreen() {
             LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
                 items(entries, key = { it.absolutePath }) { entry ->
                     Card(
-                        onClick = {
-                            when {
-                                entry.isDirectory -> dir = entry
-                                isHtml(entry) -> previewFile = entry
-                                isTextFile(entry) -> editorFile = entry
-                                else -> dialog = FD.Info(entry)
-                            }
-                        },
+                        onClick = { openEntry(entry) },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 10.dp, vertical = 3.dp)
@@ -186,16 +201,17 @@ fun FilesScreen() {
                                 )
                             }
                             RowMenu(
-                                onOpen = {
-                                    when {
-                                        entry.isDirectory -> dir = entry
-                                        isHtml(entry) -> previewFile = entry
-                                        isTextFile(entry) -> editorFile = entry
-                                        else -> dialog = FD.Info(entry)
-                                    }
+                                onOpen = { openEntry(entry) },
+                                onEdit = {
+                                    context.startActivity(
+                                        android.content.Intent(context, com.danielsem65.semcodeai.TextEditActivity::class.java)
+                                            .putExtra("path", entry.absolutePath))
                                 },
-                                onEdit = { editorFile = entry },
-                                onPreview = { previewFile = entry },
+                                onPreview = {
+                                    context.startActivity(
+                                        android.content.Intent(context, com.danielsem65.semcodeai.HtmlPreviewActivity::class.java)
+                                            .putExtra("path", entry.absolutePath))
+                                },
                                 onExtract = {
                                     val dest = File(entry.parentFile, entry.name.removeSuffix(".zip"))
                                     runCatching { unzipTo(entry, dest) }
@@ -220,22 +236,8 @@ fun FilesScreen() {
             }
         }
 
-        // ---- overlays ----
-        editorFile?.let { f ->
-            TextEditor(
-                file = f,
-                onClose = { edited ->
-                    editorFile = null
-                    if (edited) refresh++
-                }
-            )
-        }
-        previewFile?.let { f ->
-            HtmlPreview(file = f, onClose = { previewFile = null }, onEdit = {
-                previewFile = null
-                editorFile = f
-            })
-        }
+        // Overlays removed — editor & preview are real Activities now
+        // (TextEditActivity / HtmlPreviewActivity).
     }
 
     when (val d = dialog) {
@@ -283,111 +285,6 @@ fun FilesScreen() {
             dialog = null; refresh++
         }
         null -> Unit
-    }
-}
-
-// ---------------- text editor ----------------
-
-@Composable
-private fun TextEditor(file: File, onClose: (edited: Boolean) -> Unit) {
-    val sizeBytes = remember(file.path) { runCatching { file.length() }.getOrDefault(0L) }
-    val readOnly = sizeBytes > 256 * 1024
-    val viewOnly = sizeBytes > 2 * 1024 * 1024
-
-    var original by remember(file.path) {
-        mutableStateOf(
-            runCatching { file.readText() }.getOrElse { "(unreadable: ${it.message})" }
-        )
-    }
-    var text by remember(file.path) { mutableStateOf(original) }
-    val dirty = text != original
-
-    Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = {
-                    if (!dirty || viewOnly) onClose(false)
-                    else onClose(false) // discard silently; user chose close — keep simple
-                }) { Icon(Icons.Filled.Close, contentDescription = "Close") }
-                Column(Modifier.weight(1f)) {
-                    Text(file.name, style = MaterialTheme.typography.titleSmall, maxLines = 1)
-                    Text(
-                        buildString {
-                            append(FileOps.humanSize(sizeBytes))
-                            append(" · ${text.lines().size} lines")
-                            if (viewOnly) append(" · too large to edit")
-                            else if (readOnly) append(" · read-only (large)")
-                            if (dirty) append(" · unsaved")
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                if (!viewOnly && !readOnly) {
-                    TextButton(
-                        onClick = {
-                            runCatching { file.writeText(text) }.onSuccess {
-                                original = text
-                                onClose(true)
-                            }
-                        },
-                        enabled = dirty
-                    ) {
-                        Icon(Icons.Filled.Save, contentDescription = null, Modifier.size(18.dp))
-                        Text("Save", Modifier.padding(start = 4.dp))
-                    }
-                } else {
-                    TextButton(onClick = { onClose(viewOnly.not()) }) { Text("Done") }
-                }
-            }
-            OutlinedTextField(
-                value = text,
-                onValueChange = { if (!readOnly && !viewOnly) text = it },
-                readOnly = readOnly || viewOnly,
-                textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = MaterialTheme.typography.bodySmall.fontSize),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .verticalScroll(rememberScrollState())
-            )
-        }
-    }
-}
-
-// ---------------- html preview ----------------
-
-@Composable
-private fun HtmlPreview(file: File, onClose: () -> Unit, onEdit: () -> Unit) {
-    Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onClose) { Icon(Icons.Filled.Close, contentDescription = "Close") }
-            Column(Modifier.weight(1f)) {
-                Text("Preview", style = MaterialTheme.typography.titleSmall)
-                Text(file.name, style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-            }
-            TextButton(onClick = onEdit) { Text("Edit") }
-        }
-        AndroidView(
-            factory = { ctx ->
-                WebView(ctx).apply {
-                    settings.javaScriptEnabled = true
-                    settings.allowFileAccess = true
-                    settings.allowFileAccessFromFileURLs = true
-                    settings.allowUniversalAccessFromFileURLs = true
-                    settings.loadWithOverviewMode = true
-                    webViewClient = WebViewClient()
-                }
-            },
-            update = { wv -> wv.loadUrl("file://${file.absolutePath}") },
-            modifier = Modifier.fillMaxSize()
-        )
     }
 }
 
