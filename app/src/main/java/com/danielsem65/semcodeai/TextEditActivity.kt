@@ -23,7 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.danielsem65.semcodeai.ui.theme.SemCodeAITheme
+import com.danielsem65.semcodeai.ui.theme.SemCodeTheme
 import java.io.File
 
 /** Full-screen text file editor launched from the Files tab. */
@@ -32,7 +32,7 @@ class TextEditActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val path = intent.getStringExtra("path") ?: return finish()
         setContent {
-            SemCodeAITheme {
+            SemCodeTheme {
                 com.danielsem65.semcodeai.ui.EditorScreen(path = path) { changed ->
                     setResult(if (changed) RESULT_OK else RESULT_CANCELED)
                     finish()
@@ -48,7 +48,7 @@ class HtmlPreviewActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val path = intent.getStringExtra("path") ?: return finish()
         setContent {
-            SemCodeAITheme {
+            SemCodeTheme {
                 Column(Modifier.fillMaxSize()) {
                     Row(
                         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),

@@ -56,7 +56,9 @@ fun EditorScreen(path: String, onClose: (changed: Boolean) -> Unit) {
         mutableStateOf(runCatching { file.readText() }.getOrElse { "(unreadable: ${it.message})" })
     }
     var value by remember(path) {
-        mutableStateOf(androidx.compose.ui.text.TextFieldValue(original, TextRange(0)))
+        mutableStateOf<androidx.compose.ui.text.TextFieldValue>(
+            androidx.compose.ui.text.TextFieldValue(text = original, selection = TextRange(0))
+        )
     }
     var changed by remember(path) { mutableStateOf(false) }
 
