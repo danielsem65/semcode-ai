@@ -2,6 +2,7 @@ package com.danielsem65.semcodeai.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -36,7 +37,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextFieldValue
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -56,8 +59,8 @@ fun EditorScreen(path: String, onClose: (changed: Boolean) -> Unit) {
         mutableStateOf(runCatching { file.readText() }.getOrElse { "(unreadable: ${it.message})" })
     }
     var value by remember(path) {
-        mutableStateOf<androidx.compose.ui.text.TextFieldValue>(
-            androidx.compose.ui.text.TextFieldValue(text = original, selection = TextRange(0))
+        mutableStateOf<TextFieldValue>(
+            TextFieldValue(text = original, selection = TextRange(0))
         )
     }
     var changed by remember(path) { mutableStateOf(false) }
@@ -72,7 +75,7 @@ fun EditorScreen(path: String, onClose: (changed: Boolean) -> Unit) {
     var wrap by remember { mutableStateOf(true) }
     var toast by remember { mutableStateOf("") }
 
-    fun pushHistory(prev: androidx.compose.ui.text.TextFieldValue) {
+    fun pushHistory(prev: TextFieldValue) {
         val now = System.currentTimeMillis()
         if (now - lastEditMs > 400 || undoStack.isEmpty()) {
             undoStack.add(Snap(prev.text, prev.selection))
@@ -83,7 +86,7 @@ fun EditorScreen(path: String, onClose: (changed: Boolean) -> Unit) {
     }
 
     fun applySnap(s: Snap) {
-        value = androidx.compose.ui.text.TextFieldValue(s.text, s.sel)
+        value = TextFieldValue(s.text, s.sel)
     }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -196,8 +199,8 @@ fun EditorScreen(path: String, onClose: (changed: Boolean) -> Unit) {
 
 @Composable
 private fun EditorBody(
-    value: androidx.compose.ui.text.TextFieldValue,
-    onValueChange: (androidx.compose.ui.text.TextFieldValue) -> Unit,
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
     wrap: Boolean
 ) {
     val lineCount = value.text.count { it == '\n' } + 1
@@ -228,7 +231,7 @@ private fun EditorBody(
             }
         }
         if (wrap) {
-            androidx.compose.foundation.text.BasicTextField(
+            BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
                 softWrap = true,
@@ -238,7 +241,7 @@ private fun EditorBody(
                     lineHeight = EDITOR_LINE_HEIGHT,
                     color = MaterialTheme.colorScheme.onSurface
                 ),
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
@@ -246,7 +249,7 @@ private fun EditorBody(
                     .padding(horizontal = 8.dp, vertical = 8.dp)
             )
         } else {
-            androidx.compose.foundation.text.BasicTextField(
+            BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
                 softWrap = false,
@@ -256,7 +259,7 @@ private fun EditorBody(
                     lineHeight = EDITOR_LINE_HEIGHT,
                     color = MaterialTheme.colorScheme.onSurface
                 ),
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
@@ -270,8 +273,8 @@ private fun EditorBody(
 
 @Composable
 private fun FindReplaceDialog(
-    value: androidx.compose.ui.text.TextFieldValue,
-    onApply: (androidx.compose.ui.text.TextFieldValue) -> Unit,
+    value: TextFieldValue,
+    onApply: (TextFieldValue) -> Unit,
     onDismiss: () -> Unit
 ) {
     var find by remember { mutableStateOf("") }
@@ -297,7 +300,7 @@ private fun FindReplaceDialog(
         ) {
             val newText = value.text.replaceRange(sel.min, sel.max, replaceWith)
             val pos = sel.min + replaceWith.length
-            onApply(androidx.compose.ui.text.TextFieldValue(newText, TextRange(pos, pos)))
+            onApply(TextFieldValue(newText, TextRange(pos, pos)))
             msg = ""
         } else findNext()
     }
@@ -313,7 +316,7 @@ private fun FindReplaceDialog(
             idx = sb.indexOf(find, idx + replaceWith.length)
         }
         if (count > 0) {
-            onApply(androidx.compose.ui.text.TextFieldValue(sb.toString(), TextRange(0)))
+            onApply(TextFieldValue(sb.toString(), TextRange(0)))
             msg = "Replaced $count occurrence(s)"
         } else msg = "Not found"
     }
