@@ -23,6 +23,11 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
+      - name: Dump resolved Compose versions (temporary debug)
+        run: |
+          gradle :app:dependencies --configuration debugCompileClasspath --no-daemon > deps.txt || true
+          grep -oE "androidx\.compose[a-zA-Z0-9:._-]*" deps.txt | sort -u
+
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
 
