@@ -33,6 +33,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import java.io.File
 
 private val EDITOR_FONT = 15.sp
@@ -72,13 +74,16 @@ fun EditorScreen(path: String, onClose: (changed: Boolean) -> Unit) {
     val hScroll = rememberScrollState()
     val density = LocalDensity.current
     val lineHeightPx = with(density) { EDITOR_LINE_HEIGHT_SP.sp.toDp().toPx() }
+    val scope = rememberCoroutineScope()
 
     fun jumpTo(charIndex: Int) {
-        if (charIndex <= 0) { scroll.scrollTo(0); return }
-        var line = 0
-        for (i in 0 until charIndex.coerceAtMost(text.length)) if (text[i] == '\n') line++
-        val target = ((line - 6).coerceAtLeast(0) * lineHeightPx).toInt()
-        scroll.scrollTo(target)
+        scope.launch {
+            if (charIndex <= 0) { scroll.scrollTo(0); return@launch }
+            var line = 0
+            for (i in 0 until charIndex.coerceAtMost(text.length)) if (text[i] == '\n') line++
+            val target = ((line - 6).coerceAtLeast(0) * lineHeightPx).toInt()
+            scroll.scrollTo(target)
+        }
     }
 
     fun pushHistory(prev: String) {
@@ -199,7 +204,7 @@ fun EditorScreen(path: String, onClose: (changed: Boolean) -> Unit) {
                         .padding(horizontal = 8.dp, vertical = 8.dp)
                 BasicTextField(
                     value = text,
-                    onValueChange = ::setBody,
+                    onValueChange = { setBody(it) },
                     softWrap = wrap,
                     textStyle = TextStyle(
                         fontFamily = FontFamily.Monospace,
@@ -216,8 +221,8 @@ fun EditorScreen(path: String, onClose: (changed: Boolean) -> Unit) {
         if (showFind) {
             FindReplaceDialog(
                 text = text,
-                onApply = ::setBody,
-                onNext = ::jumpTo,
+                onApply = { setBody(it) },
+                onNext = { jumpTo(it) },
                 onDismiss = { showFind = false }
             )
         }
