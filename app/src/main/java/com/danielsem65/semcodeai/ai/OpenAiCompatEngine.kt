@@ -262,11 +262,21 @@ class OpenAiCompatEngine(
 
         private fun friendlyError(code: Int, body: String): String {
             val detail = errText(body)
+            val lower = detail.lowercase()
+            // Zen locks its free tier to the official OpenCode client/CLI.
+            if (lower.contains("only be used in opencode") ||
+                lower.contains("free tire") ||
+                lower.contains("rate limit") && lower.contains("opencode")
+            ) {
+                return "OpenCode Zen's free tier only works inside the official OpenCode app/CLI, so SemCode can't use it. " +
+                    "Switch to OpenRouter or Groq in Settings and paste that key (both work fine here). [$code]"
+            }
             val limited = code == 429 || code == 492 ||
-                detail.contains("rate limit", true) || detail.contains("FreeUsageLimit", true)
+                lower.contains("rate limit") || lower.contains("FreeUsageLimit", true) ||
+                lower.contains("quota") || lower.contains("out of credits") || lower.contains("insufficient")
             return if (limited)
-                "This free model's quota is used up right now (Zen resets daily). " +
-                    "Pick another model from the list, switch provider in Settings, or try again later. [$code]"
+                "Free-tier quota reached for this model right now (providers reset it daily). " +
+                    "Try again later, pick another model from the list, or add a small credit on OpenRouter to raise its caps a lot. [$code]"
             else "HTTP $code: $detail"
         }
     }

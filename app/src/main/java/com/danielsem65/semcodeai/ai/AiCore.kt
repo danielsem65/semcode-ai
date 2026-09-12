@@ -68,18 +68,25 @@ object Providers {
 
     val ALL = listOf(
         Provider(
-            "zen", "OpenCode Zen",
-            "https://opencode.ai/zen/v1",
-            "big-pickle",
-            "https://opencode.ai/auth",
-            "FREE coding models — big-pickle, x-preview-f-free, mimo & more. Key from opencode.ai/auth."
-        ),
-        Provider(
             "openrouter", "OpenRouter",
             "https://openrouter.ai/api/v1",
             "openrouter/free",
             "https://openrouter.ai/keys",
-            "'openrouter/free' routes to any free model; append ':free' to specific models for $0."
+            "'openrouter/free' routes to $0 models. Free tier is capped per day — adding even ~\$1 of credit raises those limits massively."
+        ),
+        Provider(
+            "groq", "Groq",
+            "https://api.groq.com/openai/v1",
+            "llama-3.3-70b-versatile",
+            "https://console.groq.com/keys",
+            "Very generous free tier (separate quota from OpenRouter) and blazing-fast streaming. Key from console.groq.com/keys."
+        ),
+        Provider(
+            "zen", "OpenCode Zen",
+            "https://opencode.ai/zen/v1",
+            "big-pickle",
+            "https://opencode.ai/auth",
+            "Zen's free tier only works INSIDE the official OpenCode app/CLI — from third-party apps like this one it returns 400 \"only be used in OpenCode\". Prefer OpenRouter or Groq."
         ),
         Provider(
             "ollama", "Ollama (local)",

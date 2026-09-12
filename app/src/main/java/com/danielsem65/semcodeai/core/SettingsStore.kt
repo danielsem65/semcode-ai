@@ -8,7 +8,7 @@ class SettingsStore(context: Context) {
 
     // ----- AI provider -----
     var activeProviderId: String
-        get() = prefs.getString(ACTIVE_PROVIDER, "zen") ?: "zen"
+        get() = prefs.getString(ACTIVE_PROVIDER, "openrouter") ?: "openrouter"
         set(value) = prefs.edit().putString(ACTIVE_PROVIDER, value).apply()
 
     var modelOverride: String
