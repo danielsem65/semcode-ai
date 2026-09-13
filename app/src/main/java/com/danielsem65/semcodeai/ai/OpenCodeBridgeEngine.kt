@@ -1,6 +1,7 @@
 package com.danielsem65.semcodeai.ai
 
 import com.danielsem65.semcodeai.SemApp
+import com.danielsem65.semcodeai.core.OpenCodeBridge
 import com.danielsem65.semcodeai.core.SettingsStore
 import com.danielsem65.semcodeai.core.Workspace
 import org.json.JSONObject
@@ -46,7 +47,11 @@ class OpenCodeBridgeEngine(
         "LANG" to "C.UTF-8",
         "TERM" to "dumb",
         "OPENCODE_DISABLE_AUTOUPDATE" to "true",
-        "OPENCODE_CLIENT" to "cli"
+        "OPENCODE_CLIENT" to "cli",
+        // Android's app seccomp filter SIGSYS-traps Bun syscalls; this shim
+        // turns those traps into -ENOSYS so the CLI can actually run (see
+        // OpenCodeBridge.GUEST_SIGSYS).
+        "LD_PRELOAD" to OpenCodeBridge.GUEST_SIGSYS
     ).plus(
         if (settings.apiKey("zen").isNotBlank()) mapOf("OPENCODE_API_KEY" to settings.apiKey("zen"))
         else emptyMap()
@@ -61,6 +66,7 @@ class OpenCodeBridgeEngine(
         if (!bin.isFile) throw RuntimeException(
             "The opencode CLI isn't installed yet — Settings → OpenCode (Zen CLI) → tap Install (~176 MB)."
         )
+        OpenCodeBridge.ensureSigsysShim(app)
         return app.linuxEnv.rootfsDir()
     }
 

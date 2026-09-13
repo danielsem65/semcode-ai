@@ -21,11 +21,46 @@ object OpenCodeBridge {
     const val GUEST_BIN = "/root/opencode/opencode"
     const val GUEST_CONFIG = "/root/.config/opencode/opencode.json"
 
+    /**
+     * Android's app seccomp filter (installed by Zygote, cannot be removed)
+     * traps syscalls Bun uses (close_range, epoll_pwait2, openat2, …) as
+     * SIGSYS before they can return, killing the CLI — even `--version`.
+     * This LD_PRELOAD shim (built by CI from sysguard/sigsys-handler-arm64.c)
+     * converts those traps into -ENOSYS so Bun's fallbacks run instead.
+     */
+    const val SIGSYS_ASSET = "sigsys/libsigsys-arm64.so"
+    const val GUEST_SIGSYS = "/root/.semcode/libsigsys.so"
+
     fun guestBinHost(app: SemApp): File =
         File(app.linuxEnv.rootfsDir(), "root/opencode/opencode")
 
     fun guestConfigHost(app: SemApp): File =
         File(app.linuxEnv.rootfsDir(), "root/.config/opencode/opencode.json")
+
+    fun guestSigsysHost(app: SemApp): File =
+        File(app.linuxEnv.rootfsDir(), "root/.semcode/libsigsys.so")
+
+    /** Puts the SIGSYS shim into the guest (once) so opencode can run at all. */
+    fun ensureSigsysShim(app: SemApp) {
+        val shim = guestSigsysHost(app)
+        if (shim.isFile && shim.length() > 0) return
+        runCatching {
+            shim.parentFile?.mkdirs()
+            app.assets.open(SIGSYS_ASSET).use { ins ->
+                shim.outputStream().use { outs ->
+                    val buf = ByteArray(16 * 1024)
+                    while (true) {
+                        val n = ins.read(buf)
+                        if (n <= 0) break
+                        outs.write(buf, 0, n)
+                    }
+                }
+            }
+            shim.setExecutable(true)
+        }.getOrElse {
+            throw RuntimeException("Cannot install SIGSYS shim into the Linux environment: ${it.message}")
+        }
+    }
 
     fun isInstalled(app: SemApp): Boolean =
         runCatching { app.linuxEnv.healthCheck() == null && guestBinHost(app).isFile }.getOrDefault(false)
@@ -51,6 +86,7 @@ object OpenCodeBridge {
             require(bin.isFile) { "extraction did not produce $bin" }
             onProgress(100)
             writeKeyConfig(app, app.settings.apiKey("zen"))
+            ensureSigsysShim(app)
         } finally {
             tar.delete()
         }

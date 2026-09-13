@@ -23,6 +23,14 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
+      - name: Build Android SIGSYS shim (arm64)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+          mkdir -p app/src/main/assets/sigsys
+          aarch64-linux-gnu-gcc -shared -fPIC -O2 -Wall -o app/src/main/assets/sigsys/libsigsys-arm64.so sysguard/sigsys-handler-arm64.c
+          ls -la app/src/main/assets/sigsys
+
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
 
