@@ -95,16 +95,14 @@ class OpenCodeBridgeEngine(
     }
 
     private fun scriptFor(promptFile: String, extra: String = ""): String =
-        "export LD_PRELOAD=${OpenCodeBridge.GUEST_SIGSYS}; " +
-            "{ echo \"shell=\$0\"; echo '--- env (scrubbed) ---'; " +
-            "env | sed 's/\\(OPENCODE_API_KEY=\\).*/\\1<redacted>/'; " +
-            "echo '--- shim ---'; ls -la ${OpenCodeBridge.GUEST_SIGSYS} 2>&1; " +
-            "echo '--- shelf ---'; ls -la /root/.semcode/ 2>&1; " +
-            "echo '--- opencode ---'; ls -la /root/opencode/ 2>&1 | head -4; " +
-            "} > /workspace/.semcode/diag.txt 2>&1; " +
+        "{ echo '== inherited env =='; env | sed 's/\\(OPENCODE_API_KEY=\\).*/\\1<redacted>/'; " +
+            "export LD_PRELOAD=${OpenCodeBridge.GUEST_SIGSYS}; " +
+            "echo '== after export: LD_PRELOAD='\"\$LD_PRELOAD\"; " +
+            "echo '== SIGSYS_LOG='\"\$SIGSYS_LOG\"; " +
+            "ls -la ${OpenCodeBridge.GUEST_SIGSYS}; ls -la /root/.semcode/; " +
+            "echo '== opencode dir =='; ls -la /root/opencode/ | head -5; " +
+            "} >&2; " +
             "cd /workspace; " +
-            // Re-export LD_PRELOAD inside the guest shell so the shim reaches
-            // the opencode exec even if proot strips the env at its own exec.
             "/root/opencode/opencode run --format json --auto $extra " +
             "-m '${model.replace("'", "")}' " +
             "\"$(cat '$promptFile')\""
