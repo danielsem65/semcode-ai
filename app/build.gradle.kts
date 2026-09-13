@@ -16,13 +16,29 @@ android {
         // exec() from app storage is allowed (required for the proot Linux env)
         // and enables classic full-storage permissions.
         targetSdk = 28
-        versionCode = 36
-        versionName = "2.11.0"
+        versionCode = 37
+        versionName = "2.11.1"
+    }
+
+    signingConfigs {
+        // Committed keystore (repo-owned sideload cert) so EVERY build is signed
+        // with the same key — GitHub runners generate a fresh debug key per job,
+        // which made each release uninstallable over the previous one.
+        create("sideload") {
+            storeFile = rootProject.file("keystore/semcode-sideload.jks")
+            storePassword = "semcode-sideload"
+            keyAlias = "semcode"
+            keyPassword = "semcode-sideload"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("sideload")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("sideload")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
