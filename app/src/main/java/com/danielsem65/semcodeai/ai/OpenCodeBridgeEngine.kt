@@ -88,12 +88,11 @@ class OpenCodeBridgeEngine(
     }
 
     private fun scriptFor(promptFile: String, extra: String = ""): String =
-        "echo Y1-sh-booted >&2; " +
-            "/bin/true; echo Y2-true-rc=\$? >&2; " +
-            "env | sed -n '1,4p' >&2 2>&1; echo Y3-env-rc=\$? >&2; " +
-            "/bin/ls -la /root/.semcode >&2 2>&1; echo Y4-ls-rc=\$? >&2; " +
-            "/root/opencode/opencode --version >&2 2>&1; echo Y5-opencode-rc=\$? >&2; " +
-            "echo Y6-end >&2"
+        "echo BRIDGE-RUN-START >&2; " +
+            "/root/opencode/opencode run --format json --auto $extra " +
+            "-m '${model.replace("'", "")}' " +
+            "\"$(cat '$promptFile')\"; " +
+            "echo BRIDGE-EXIT-\$? >&2"
 
     private fun buildProcess(guestScriptPath: String): Process {
         val workspace = Workspace.root(app, app.settings)
