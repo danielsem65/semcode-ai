@@ -88,22 +88,22 @@ class OpenCodeBridgeEngine(
     }
 
     private fun scriptFor(promptFile: String, extra: String = ""): String =
-        "echo BOOT1-sh-started >&2; " +
-            "echo \"SHELL=\$0 CWD=\$(pwd)\" >&2; " +
-            "ls -la /root/.semcode/ >&2 2>&1; " +
-            "echo BOOT2-ls-shelf-done >&2; " +
-            "ls -la /root/opencode/ | head -5 >&2 2>&1; " +
-            "echo BOOT3-ls-bin-done >&2; " +
-            "echo BOOT4-about-to-run >&2; " +
+        "echo Y1-file-start arg0=\$0 >&2; " +
+            "sh -c 'echo Y2-inner-c-inside-file >&2'; " +
+            "echo Y3-after-inner-c >&2; " +
+            "ls -ld /root /workspace /workspace/.semcode >&2 2>&1; " +
+            "echo Y4-ls-done >&2; " +
+            "ls -la /root/.semcode /root/opencode | head -20 >&2 2>&1; " +
+            "echo Y5-done >&2; " +
             "/root/opencode/opencode run --format json --auto $extra " +
             "-m '${model.replace("'", "")}' " +
             "\"$(cat '$promptFile')\"; " +
-            "echo BOOT5-opencode-returned >&2"
+            "echo Y6-opencode-returned >&2"
 
-    private fun buildProcess(script: String): Process {
+    private fun buildProcess(scriptFile: File): Process {
         val workspace = Workspace.root(app, app.settings)
         val pb = ProcessBuilder(
-            app.linuxEnv.prootCommand(workspace) + listOf("-v") + listOf("5") + listOf("-c", script)
+            app.linuxEnv.prootCommand(workspace) + listOf(scriptFile.absolutePath)
         )
         pb.environment().putAll(guestEnv() + app.linuxEnv.shellEnv())
         val p = pb.start()
@@ -136,7 +136,9 @@ class OpenCodeBridgeEngine(
         var hadEvent = false
 
         try {
-            val p = buildProcess(scriptFor("/workspace/.semcode/oc_prompt"))
+            val runScript = File(File(workspace, ".semcode"), "run.sh")
+            runScript.writeText(scriptFor("/workspace/.semcode/oc_prompt"))
+            val p = buildProcess(runScript)
             val errTail = StringBuilder()
             val diagLog = File(File(workspace, ".semcode"), "proot-stderr.log")
             runCatching { diagLog.parentFile?.mkdirs() }
