@@ -96,20 +96,18 @@ class OpenCodeBridgeEngine(
 
     private fun scriptFor(promptFile: String, extra: String = ""): String =
         "mkdir -p /workspace/.semcode; " +
-            "{ echo '== inherited env =='; env | sed 's/\\(OPENCODE_API_KEY=\\).*/\\1<redacted>/'; " +
+            "echo 'STAGE1 shell-booted' > /workspace/.semcode/diag.txt; " +
+            "env | sed 's/\\(OPENCODE_API_KEY=\\).*/\\1<redacted>/' >> /workspace/.semcode/diag.txt; " +
             "export LD_PRELOAD=${OpenCodeBridge.GUEST_SIGSYS}; " +
-            "echo '== exported LD_PRELOAD='\"\$LD_PRELOAD\"; " +
-            "echo '== SIGSYS_LOG='\"\$SIGSYS_LOG\"; " +
-            "ls -la ${OpenCodeBridge.GUEST_SIGSYS}; ls -la /root/.semcode/; " +
-            "echo '== opencode dir =='; ls -la /root/opencode/ | head -5; " +
-            "echo '== diag done =='; " +
-            "} > /workspace/.semcode/diag.txt 2>&1; " +
-            "cat /workspace/.semcode/diag.txt >&2 2>/dev/null; " +
+            "echo 'STAGE2 LD_PRELOAD='\"\$LD_PRELOAD\"' SIGSYS_LOG='\"\$SIGSYS_LOG\" >> /workspace/.semcode/diag.txt; " +
+            "ls -la ${OpenCodeBridge.GUEST_SIGSYS} >> /workspace/.semcode/diag.txt 2>&1; " +
+            "echo 'STAGE3 opencode dir:' >> /workspace/.semcode/diag.txt; " +
+            "ls -la /root/opencode/ | head -5 >> /workspace/.semcode/diag.txt 2>&1; " +
+            "echo 'STAGE4 launching opencode' >> /workspace/.semcode/diag.txt; " +
             "cd /workspace; " +
-            "echo '== LAUNCHING OPENCODE ==' >&2; " +
             "/root/opencode/opencode run --format json --auto $extra " +
             "-m '${model.replace("'", "")}' " +
-            "\"$(cat '$promptFile')\""
+            "\"$(cat '$promptFile')\" 2>&1 | tee -a /workspace/.semcode/diag.txt"
 
     private fun buildProcess(script: String): Process {
         val workspace = Workspace.root(app, app.settings)
@@ -149,9 +147,12 @@ class OpenCodeBridgeEngine(
         try {
             val p = buildProcess(scriptFor("/workspace/.semcode/oc_prompt"))
             val errTail = StringBuilder()
+            val diagLog = File(File(workspace, ".semcode"), "proot-stderr.log")
+            runCatching { diagLog.parentFile?.mkdirs() }
             val errThread = Thread {
                 runCatching { p.errorStream.bufferedReader().forEachLine { line ->
                     if (errTail.length < 60_000) errTail.appendLine(line)
+                    runCatching { diagLog.appendText("$line\n") }
                 } }
             }.also { it.start() }
 
