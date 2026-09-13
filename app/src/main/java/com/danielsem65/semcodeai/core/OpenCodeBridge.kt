@@ -16,7 +16,7 @@ object OpenCodeBridge {
     const val RELEASE_TAG = "v1.18.30"
     private const val DOWNLOAD_URL =
         "https://github.com/anomalyco/opencode/releases/download/$RELEASE_TAG/opencode-linux-arm64.tar.gz"
-    private const val SIZE_HINT_MB = 184
+    const val SIZE_HINT_MB = 184
 
     const val GUEST_BIN = "/root/opencode/opencode"
     const val GUEST_CONFIG = "/root/.config/opencode/opencode.json"
