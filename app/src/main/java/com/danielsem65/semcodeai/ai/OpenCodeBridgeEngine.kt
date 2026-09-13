@@ -47,14 +47,7 @@ class OpenCodeBridgeEngine(
         "LANG" to "C.UTF-8",
         "TERM" to "dumb",
         "OPENCODE_DISABLE_AUTOUPDATE" to "true",
-        "OPENCODE_CLIENT" to "cli",
-        // Android's app seccomp filter SIGSYS-traps Bun syscalls; this shim
-        // turns those traps into -ENOSYS so the CLI can actually run (see
-        // OpenCodeBridge.GUEST_SIGSYS).
-        "LD_PRELOAD" to OpenCodeBridge.GUEST_SIGSYS,
-        "SIGSYS_LOG" to "/workspace/.semcode/sigsys.log",
-        // Bun 1.2.10+ feature flag: never use epoll_pwait2 (syscall 441).
-        "BUN_FEATURE_FLAG_DISABLE_EPOLL_PWAIT2" to "1"
+        "OPENCODE_CLIENT" to "cli"
     ).plus(
         if (settings.apiKey("zen").isNotBlank()) mapOf("OPENCODE_API_KEY" to settings.apiKey("zen"))
         else emptyMap()
@@ -104,9 +97,6 @@ class OpenCodeBridgeEngine(
             "echo STAGE3-env-ok >>/workspace/.semcode/diag.txt; " +
             "ls -la ${OpenCodeBridge.GUEST_SIGSYS} >>/workspace/.semcode/diag.txt 2>&1; " +
             "echo STAGE4-ls-ok >>/workspace/.semcode/diag.txt; " +
-            "export LD_PRELOAD=${OpenCodeBridge.GUEST_SIGSYS}; " +
-            "echo STAGE5-exported >>/workspace/.semcode/diag.txt; " +
-            "echo \"LD_PRELOAD=\$LD_PRELOAD SIGSYS_LOG=\$SIGSYS_LOG\" >>/workspace/.semcode/diag.txt; " +
             "/root/opencode/opencode run --format json --auto $extra " +
             "-m '${model.replace("'", "")}' " +
             "\"$(cat '$promptFile')\" 2>&1 | tee -a /workspace/.semcode/diag.txt; " +
