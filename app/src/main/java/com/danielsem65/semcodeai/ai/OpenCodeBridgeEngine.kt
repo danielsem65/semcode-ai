@@ -95,10 +95,16 @@ class OpenCodeBridgeEngine(
     }
 
     private fun scriptFor(promptFile: String, extra: String = ""): String =
-        "cd /workspace; " +
+        "export LD_PRELOAD=${OpenCodeBridge.GUEST_SIGSYS}; " +
+            "{ echo \"shell=\$0\"; echo '--- env (scrubbed) ---'; " +
+            "env | sed 's/\\(OPENCODE_API_KEY=\\).*/\\1<redacted>/'; " +
+            "echo '--- shim ---'; ls -la ${OpenCodeBridge.GUEST_SIGSYS} 2>&1; " +
+            "echo '--- shelf ---'; ls -la /root/.semcode/ 2>&1; " +
+            "echo '--- opencode ---'; ls -la /root/opencode/ 2>&1 | head -4; " +
+            "} > /workspace/.semcode/diag.txt 2>&1; " +
+            "cd /workspace; " +
             // Re-export LD_PRELOAD inside the guest shell so the shim reaches
             // the opencode exec even if proot strips the env at its own exec.
-            "export LD_PRELOAD=${OpenCodeBridge.GUEST_SIGSYS}; " +
             "/root/opencode/opencode run --format json --auto $extra " +
             "-m '${model.replace("'", "")}' " +
             "\"$(cat '$promptFile')\""
