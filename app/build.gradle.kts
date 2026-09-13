@@ -16,8 +16,8 @@ android {
         // exec() from app storage is allowed (required for the proot Linux env)
         // and enables classic full-storage permissions.
         targetSdk = 28
-        versionCode = 38
-        versionName = "2.12.0"
+        versionCode = 39
+        versionName = "2.12.1"
     }
 
     signingConfigs {

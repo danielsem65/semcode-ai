@@ -93,6 +93,9 @@ class OpenCodeBridgeEngine(
 
     private fun scriptFor(promptFile: String, extra: String = ""): String =
         "cd /workspace; " +
+            // Re-export LD_PRELOAD inside the guest shell so the shim reaches
+            // the opencode exec even if proot strips the env at its own exec.
+            "export LD_PRELOAD=${OpenCodeBridge.GUEST_SIGSYS}; " +
             "/root/opencode/opencode run --format json --auto $extra " +
             "-m '${model.replace("'", "")}' " +
             "\"$(cat '$promptFile')\""
@@ -238,7 +241,8 @@ class OpenCodeBridgeEngine(
             rootfs()
             val pb = ProcessBuilder(
                 app.linuxEnv.prootCommand(ws) + listOf("-c",
-                    "cd /workspace; $opencodePathInGuest models opencode 2>/dev/null; true")
+                    "cd /workspace; export LD_PRELOAD=${OpenCodeBridge.GUEST_SIGSYS}; " +
+                        "$opencodePathInGuest models opencode 2>/dev/null; true")
             )
             pb.environment().putAll(guestEnv() + app.linuxEnv.shellEnv())
             val p = pb.start()
