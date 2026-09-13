@@ -15,6 +15,10 @@ import java.io.File
 
 class SemApp : Application() {
 
+    companion object {
+        @Volatile lateinit var instance: SemApp
+    }
+
     lateinit var settings: SettingsStore
         private set
 
@@ -110,6 +114,7 @@ class SemApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         com.danielsem65.semcodeai.core.CrashLog.install(this)
         settings = SettingsStore(this)
     }

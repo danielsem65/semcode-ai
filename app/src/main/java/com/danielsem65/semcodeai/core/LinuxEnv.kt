@@ -45,6 +45,12 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
     private val linuxDir get() = File(context.filesDir, "linux")
     private val rootfs get() = File(linuxDir, "rootfs")
 
+    /** App-private rootfs directory — needed by the OpenCode CLI bridge. */
+    fun rootfsDir(): File = rootfs
+
+    /** App-private Linux data dir (rootfs, caches). */
+    fun linuxDataDir(): File = linuxDir
+
     // ---------------- health ----------------
 
     /** Null when the environment can actually boot a shell; otherwise why not. */

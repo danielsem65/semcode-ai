@@ -82,11 +82,19 @@ object Providers {
             "Very generous free tier (separate quota from OpenRouter) and blazing-fast streaming. Key from console.groq.com/keys."
         ),
         Provider(
+            "zen-cli", "OpenCode CLI (free Zen)",
+            "http://127.0.0.1:4101",
+            "opencode/big-pickle",
+            "https://opencode.ai/auth",
+            "Runs the OFFICIAL opencode CLI inside the Linux env — the only way to use Zen's FREE models (big-pickle, mimo…) from SemCode, because Zen locks free tier to the real opencode client. Set it up in Settings → OpenCode (Zen CLI). Choose this provider for free unlimited-ish coding.",
+            isLocal = true
+        ),
+        Provider(
             "zen", "OpenCode Zen",
             "https://opencode.ai/zen/v1",
             "big-pickle",
             "https://opencode.ai/auth",
-            "Zen's free tier only works INSIDE the official OpenCode app/CLI — from third-party apps like this one it returns 400 \"only be used in OpenCode\". Prefer OpenRouter or Groq."
+            "PAID Zen models (gpt-5, deepseek-v4-flash…) work here directly from any client. FREE models are locked to the official OpenCode app and will 400 here — use OpenCode CLI above for those, or add Zen balance + a paid model for direct use."
         ),
         Provider(
             "ollama", "Ollama (local)",
@@ -109,5 +117,10 @@ object Providers {
     fun byId(id: String): Provider = ALL.firstOrNull { it.id == id } ?: ALL.first()
 
     fun create(provider: Provider, apiKey: String, model: String): AiEngine =
-        OpenAiCompatEngine(provider.baseUrl, apiKey.ifBlank { "none" }, model, isLocal = provider.isLocal)
+        if (provider.id == "zen-cli") {
+            val app = com.danielsem65.semcodeai.SemApp.instance
+            OpenCodeBridgeEngine(app, app.settings, model)
+        } else {
+            OpenAiCompatEngine(provider.baseUrl, apiKey.ifBlank { "none" }, model, isLocal = provider.isLocal)
+        }
 }

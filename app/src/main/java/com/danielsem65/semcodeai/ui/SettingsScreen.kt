@@ -91,10 +91,12 @@ fun SettingsScreen(vm: AppViewModel) {
 
         LinuxCard(vm)
 
+        OpenCodeCard(vm)
+
         GithubCard()
 
         Text(
-            "SemCode AI v2.5 · on-device offline AI · files + shell + Linux + GitHub agent · keys are stored only on this device.",
+            "SemCode AI v2.11 · on-device offline AI · files + shell + Linux + GitHub agent · keys are stored only on this device.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 16.dp, bottom = 24.dp)
@@ -783,6 +785,134 @@ private fun LinuxCard(vm: AppViewModel) {
                         modifier = Modifier
                             .weight(1f)
                             .padding(start = 8.dp)
+                    )
+                }
+            }
+            if (msg.isNotBlank()) {
+                Text(
+                    msg,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (msg.startsWith("✗")) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OpenCodeCard(vm: AppViewModel) {
+    val context = LocalContext.current
+    val app = context.applicationContext as SemApp
+    val settings = app.settings
+    val scope = rememberCoroutineScope()
+    val main = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
+
+    var busy by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf(0) }
+    var msg by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf(com.danielsem65.semcodeai.core.OpenCodeBridge.isReady(app)) }
+
+    fun refresh() {
+        status = com.danielsem65.semcodeai.core.OpenCodeBridge.isReady(app)
+        vm.refreshStatus()
+    }
+
+    val linuxOk = app.linuxEnv.isInstalled()
+    val hasZenKey = settings.apiKey("zen").isNotBlank()
+
+    Card(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 12.dp)
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Text("OpenCode CLI (free Zen)", style = MaterialTheme.typography.titleMedium)
+            Text(
+                when {
+                    !linuxOk -> "Needs the Linux environment above — install it first."
+                    !com.danielsem65.semcodeai.core.OpenCodeBridge.isInstalled(app) ->
+                        "CLI not installed yet (~${com.danielsem65.semcodeai.core.OpenCodeBridge.SIZE_HINT_MB} MB once)."
+                    !status && !hasZenKey ->
+                        "CLI installed. Save your Zen key under the \"OpenCode Zen\" provider, then return here."
+                    !status -> "CLI installed. Tap Link Zen key to finish the free-Zen setup."
+                    else -> "✓ Ready — official opencode ${com.danielsem65.semcodeai.core.OpenCodeBridge.RELEASE_TAG} running with your Zen key."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = when {
+                    status -> MaterialTheme.colorScheme.primary
+                    linuxOk -> MaterialTheme.colorScheme.onSurfaceVariant
+                    else -> MaterialTheme.colorScheme.error
+                },
+                modifier = Modifier.padding(top = 2.dp)
+            )
+            Text(
+                "This is why free Zen works: SemCode runs the REAL opencode client inside the Linux env, " +
+                    "so Zen's free models (big-pickle, mimo…) accept the requests. The client edits /workspace itself — " +
+                    "the \"Ask before changes\" approval flow doesn't apply for this provider.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 6.dp)
+            )
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(top = 10.dp)
+            ) {
+                Button(
+                    enabled = linuxOk && !busy,
+                    onClick = {
+                        busy = true; progress = 0; msg = ""
+                        scope.launch {
+                            try {
+                                withContext(Dispatchers.IO) {
+                                    com.danielsem65.semcodeai.core.OpenCodeBridge.install(app) { pct ->
+                                        main.post { progress = pct }
+                                    }
+                                }
+                                msg = "✓ opencode installed"
+                            } catch (e: Exception) {
+                                msg = "✗ ${e.message?.take(200)}"
+                            }
+                            refresh(); busy = false
+                        }
+                    }
+                ) {
+                    Text(if (com.danielsem65.semcodeai.core.OpenCodeBridge.isInstalled(app)) "Reinstall CLI" else "Install CLI")
+                }
+                OutlinedButton(
+                    enabled = !busy && linuxOk && hasZenKey,
+                    onClick = {
+                        msg = ""
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                com.danielsem65.semcodeai.core.OpenCodeBridge.writeKeyConfig(app, settings.apiKey("zen"))
+                            }
+                            msg = "✓ Zen key linked — AI can use free Zen now"
+                            refresh(); busy = false
+                        }
+                    },
+                    modifier = Modifier.padding(start = 8.dp)
+                ) { Text("Link Zen key") }
+                Button(
+                    enabled = !busy && status,
+                    onClick = {
+                        settings.activeProviderId = "zen-cli"
+                        vm.refreshStatus()
+                        msg = "✓ switched — ask the AI something (needs the Linux env booted once)"
+                    },
+                    modifier = Modifier.padding(start = 8.dp)
+                ) { Text("Use provider") }
+            }
+            if (busy) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                    Text("$progress%",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(end = 8.dp))
+                    LinearProgressIndicator(
+                        progress = { progress / 100f },
+                        modifier = Modifier.weight(1f)
                     )
                 }
             }
