@@ -88,22 +88,17 @@ class OpenCodeBridgeEngine(
     }
 
     private fun scriptFor(promptFile: String, extra: String = ""): String =
-        "echo Y1-file-start arg0=\$0 >&2; " +
-            "sh -c 'echo Y2-inner-c-inside-file >&2'; " +
-            "echo Y3-after-inner-c >&2; " +
-            "ls -ld /root /workspace /workspace/.semcode >&2 2>&1; " +
-            "echo Y4-ls-done >&2; " +
-            "ls -la /root/.semcode /root/opencode | head -20 >&2 2>&1; " +
-            "echo Y5-done >&2; " +
-            "/root/opencode/opencode run --format json --auto $extra " +
-            "-m '${model.replace("'", "")}' " +
-            "\"$(cat '$promptFile')\"; " +
-            "echo Y6-opencode-returned >&2"
+        "echo Y1-sh-booted >&2; " +
+            "/bin/true; echo Y2-true-rc=\$? >&2; " +
+            "env | sed -n '1,4p' >&2 2>&1; echo Y3-env-rc=\$? >&2; " +
+            "/bin/ls -la /root/.semcode >&2 2>&1; echo Y4-ls-rc=\$? >&2; " +
+            "/root/opencode/opencode --version >&2 2>&1; echo Y5-opencode-rc=\$? >&2; " +
+            "echo Y6-end >&2"
 
-    private fun buildProcess(scriptFile: File): Process {
+    private fun buildProcess(guestScriptPath: String): Process {
         val workspace = Workspace.root(app, app.settings)
         val pb = ProcessBuilder(
-            app.linuxEnv.prootCommand(workspace) + listOf(scriptFile.absolutePath)
+            app.linuxEnv.prootCommand(workspace) + listOf(guestScriptPath)
         )
         pb.environment().putAll(guestEnv() + app.linuxEnv.shellEnv())
         val p = pb.start()
@@ -138,7 +133,7 @@ class OpenCodeBridgeEngine(
         try {
             val runScript = File(File(workspace, ".semcode"), "run.sh")
             runScript.writeText(scriptFor("/workspace/.semcode/oc_prompt"))
-            val p = buildProcess(runScript)
+            val p = buildProcess("/workspace/.semcode/run.sh")
             val errTail = StringBuilder()
             val diagLog = File(File(workspace, ".semcode"), "proot-stderr.log")
             runCatching { diagLog.parentFile?.mkdirs() }
