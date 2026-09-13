@@ -98,7 +98,7 @@ object OpenCodeBridge {
         val cfg = guestConfigHost(app)
         cfg.parentFile?.mkdirs()
         cfg.writeText(
-            "{\"provider\":{\"opencode\":{\"apiKey\":${JSONEscape(zenKey)}}}}"
+            "{\"provider\":{\"opencode\":{\"apiKey\":\"${JSONEscape(zenKey)}\"}}}"
         )
     }
 

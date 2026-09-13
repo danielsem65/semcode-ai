@@ -63,6 +63,7 @@ class OpenCodeBridgeEngine(
             "The opencode CLI isn't installed yet — Settings → OpenCode (Zen CLI) → tap Install (~176 MB)."
         )
         OpenCodeBridge.ensureSigsysShim(app)
+        OpenCodeBridge.writeKeyConfig(app, settings.apiKey("zen"))
         return app.linuxEnv.rootfsDir()
     }
 
