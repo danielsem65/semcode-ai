@@ -95,19 +95,22 @@ class OpenCodeBridgeEngine(
     }
 
     private fun scriptFor(promptFile: String, extra: String = ""): String =
-        "mkdir -p /workspace/.semcode; " +
-            "echo 'STAGE1 shell-booted' > /workspace/.semcode/diag.txt; " +
-            "env | sed 's/\\(OPENCODE_API_KEY=\\).*/\\1<redacted>/' >> /workspace/.semcode/diag.txt; " +
+        "echo STAGE1-boot >/workspace/.semcode/diag.txt; " +
+            "echo \"SHELL=\$0\" >>/workspace/.semcode/diag.txt; " +
+            "pwd >>/workspace/.semcode/diag.txt; " +
+            "cd /workspace; pwd >>/workspace/.semcode/diag.txt; " +
+            "echo STAGE2-cd-ok >>/workspace/.semcode/diag.txt; " +
+            "env >>/workspace/.semcode/diag.txt 2>&1; " +
+            "echo STAGE3-env-ok >>/workspace/.semcode/diag.txt; " +
+            "ls -la ${OpenCodeBridge.GUEST_SIGSYS} >>/workspace/.semcode/diag.txt 2>&1; " +
+            "echo STAGE4-ls-ok >>/workspace/.semcode/diag.txt; " +
             "export LD_PRELOAD=${OpenCodeBridge.GUEST_SIGSYS}; " +
-            "echo 'STAGE2 LD_PRELOAD='\"\$LD_PRELOAD\"' SIGSYS_LOG='\"\$SIGSYS_LOG\" >> /workspace/.semcode/diag.txt; " +
-            "ls -la ${OpenCodeBridge.GUEST_SIGSYS} >> /workspace/.semcode/diag.txt 2>&1; " +
-            "echo 'STAGE3 opencode dir:' >> /workspace/.semcode/diag.txt; " +
-            "ls -la /root/opencode/ | head -5 >> /workspace/.semcode/diag.txt 2>&1; " +
-            "echo 'STAGE4 launching opencode' >> /workspace/.semcode/diag.txt; " +
-            "cd /workspace; " +
+            "echo STAGE5-exported >>/workspace/.semcode/diag.txt; " +
+            "echo \"LD_PRELOAD=\$LD_PRELOAD SIGSYS_LOG=\$SIGSYS_LOG\" >>/workspace/.semcode/diag.txt; " +
             "/root/opencode/opencode run --format json --auto $extra " +
             "-m '${model.replace("'", "")}' " +
-            "\"$(cat '$promptFile')\" 2>&1 | tee -a /workspace/.semcode/diag.txt"
+            "\"$(cat '$promptFile')\" 2>&1 | tee -a /workspace/.semcode/diag.txt; " +
+            "echo STAGE6-opencode-returned >>/workspace/.semcode/diag.txt"
 
     private fun buildProcess(script: String): Process {
         val workspace = Workspace.root(app, app.settings)
