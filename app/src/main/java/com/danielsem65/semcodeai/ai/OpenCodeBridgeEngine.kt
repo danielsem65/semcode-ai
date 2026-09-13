@@ -95,14 +95,18 @@ class OpenCodeBridgeEngine(
     }
 
     private fun scriptFor(promptFile: String, extra: String = ""): String =
-        "{ echo '== inherited env =='; env | sed 's/\\(OPENCODE_API_KEY=\\).*/\\1<redacted>/'; " +
+        "mkdir -p /workspace/.semcode; " +
+            "{ echo '== inherited env =='; env | sed 's/\\(OPENCODE_API_KEY=\\).*/\\1<redacted>/'; " +
             "export LD_PRELOAD=${OpenCodeBridge.GUEST_SIGSYS}; " +
-            "echo '== after export: LD_PRELOAD='\"\$LD_PRELOAD\"; " +
+            "echo '== exported LD_PRELOAD='\"\$LD_PRELOAD\"; " +
             "echo '== SIGSYS_LOG='\"\$SIGSYS_LOG\"; " +
             "ls -la ${OpenCodeBridge.GUEST_SIGSYS}; ls -la /root/.semcode/; " +
             "echo '== opencode dir =='; ls -la /root/opencode/ | head -5; " +
-            "} >&2; " +
+            "echo '== diag done =='; " +
+            "} > /workspace/.semcode/diag.txt 2>&1; " +
+            "cat /workspace/.semcode/diag.txt >&2 2>/dev/null; " +
             "cd /workspace; " +
+            "echo '== LAUNCHING OPENCODE ==' >&2; " +
             "/root/opencode/opencode run --format json --auto $extra " +
             "-m '${model.replace("'", "")}' " +
             "\"$(cat '$promptFile')\""
@@ -184,7 +188,7 @@ class OpenCodeBridgeEngine(
             val full = synchronized(text) { text.toString() }
             val exit = p.exitValue()
             if (bridgeError.isNullOrBlank() && exit != 0) {
-                bridgeError = "opencode exited with $exit: ${errTail.toString().trim().takeLast(4000)}"
+                bridgeError = "opencode exited with $exit: ${errTail.toString().trim().takeLast(55_000)}"
             }
 
             // Map the errors users actually hit (quota, permission, infra).
@@ -194,7 +198,7 @@ class OpenCodeBridgeEngine(
                 return EngineReply("$full\n\n⚠ $friendly", emptyList())
             }
             if (!hadEvent && full.isBlank()) {
-                val detail = errTail.toString().trim().takeLast(4000)
+                val detail = errTail.toString().trim().takeLast(55_000)
                 throw RuntimeException("opencode produced no output${if (detail.isNotBlank()) " — $detail" else ""}")
             }
             return EngineReply(full.ifBlank { null }, emptyList())
