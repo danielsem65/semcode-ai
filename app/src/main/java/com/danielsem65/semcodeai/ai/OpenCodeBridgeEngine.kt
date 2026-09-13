@@ -103,7 +103,7 @@ class OpenCodeBridgeEngine(
     private fun buildProcess(script: String): Process {
         val workspace = Workspace.root(app, app.settings)
         val pb = ProcessBuilder(
-            app.linuxEnv.prootCommand(workspace) + listOf("-c", script)
+            app.linuxEnv.prootCommand(workspace) + listOf("-v") + listOf("5") + listOf("-c", script)
         )
         pb.environment().putAll(guestEnv() + app.linuxEnv.shellEnv())
         val p = pb.start()
