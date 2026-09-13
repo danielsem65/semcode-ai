@@ -88,19 +88,17 @@ class OpenCodeBridgeEngine(
     }
 
     private fun scriptFor(promptFile: String, extra: String = ""): String =
-        "echo STAGE1-boot >/workspace/.semcode/diag.txt; " +
-            "echo \"SHELL=\$0\" >>/workspace/.semcode/diag.txt; " +
-            "pwd >>/workspace/.semcode/diag.txt; " +
-            "cd /workspace; pwd >>/workspace/.semcode/diag.txt; " +
-            "echo STAGE2-cd-ok >>/workspace/.semcode/diag.txt; " +
-            "env >>/workspace/.semcode/diag.txt 2>&1; " +
-            "echo STAGE3-env-ok >>/workspace/.semcode/diag.txt; " +
-            "ls -la ${OpenCodeBridge.GUEST_SIGSYS} >>/workspace/.semcode/diag.txt 2>&1; " +
-            "echo STAGE4-ls-ok >>/workspace/.semcode/diag.txt; " +
+        "echo BOOT1-sh-started >&2; " +
+            "echo \"SHELL=\$0 CWD=\$(pwd)\" >&2; " +
+            "ls -la /root/.semcode/ >&2 2>&1; " +
+            "echo BOOT2-ls-shelf-done >&2; " +
+            "ls -la /root/opencode/ | head -5 >&2 2>&1; " +
+            "echo BOOT3-ls-bin-done >&2; " +
+            "echo BOOT4-about-to-run >&2; " +
             "/root/opencode/opencode run --format json --auto $extra " +
             "-m '${model.replace("'", "")}' " +
-            "\"$(cat '$promptFile')\" 2>&1 | tee -a /workspace/.semcode/diag.txt; " +
-            "echo STAGE6-opencode-returned >>/workspace/.semcode/diag.txt"
+            "\"$(cat '$promptFile')\"; " +
+            "echo BOOT5-opencode-returned >&2"
 
     private fun buildProcess(script: String): Process {
         val workspace = Workspace.root(app, app.settings)
