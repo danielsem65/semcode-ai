@@ -90,10 +90,13 @@ class OpenCodeBridgeEngine(
 
     private fun scriptFor(promptFile: String, extra: String = ""): String =
         "echo BRIDGE-RUN-START >&2; " +
-            "/root/opencode/opencode run --format json --auto $extra " +
+            "timeout 240 /root/opencode/opencode run --format json --print-logs --auto $extra " +
             "-m '${model.replace("'", "")}' " +
-            "\"$(cat '$promptFile')\"; " +
-            "echo BRIDGE-EXIT-\$? >&2"
+            "\"$(cat '$promptFile')\" " +
+            "> /workspace/.semcode/opencode-stdout.json " +
+            "2> /workspace/.semcode/opencode-err.log; " +
+            "status=\$?; cat /workspace/.semcode/opencode-stdout.json; " +
+            "echo BRIDGE-EXIT-\$status >&2"
 
     private fun buildProcess(guestScriptPath: String): Process {
         val workspace = Workspace.root(app, app.settings)
