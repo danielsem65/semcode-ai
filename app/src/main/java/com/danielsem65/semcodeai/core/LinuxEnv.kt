@@ -384,7 +384,12 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
     /** Extra environment for the guest shell process (proot + guest). */
     fun shellEnv(): Map<String, String> {
         val tmp = File(linuxDir, "tmp").apply { mkdirs() }
-        return mapOf("PROOT_TMP_DIR" to tmp.absolutePath)
+        val ndir = context.applicationInfo.nativeLibraryDir
+        return mapOf(
+            "PROOT_TMP_DIR" to tmp.absolutePath,
+            "PROOT_LOADER" to File(ndir, "libproot_loader.so").absolutePath,
+            "LD_LIBRARY_PATH" to ndir
+        )
     }
 
     private fun download(url: String, dst: File, onProgress: (Int) -> Unit) {
