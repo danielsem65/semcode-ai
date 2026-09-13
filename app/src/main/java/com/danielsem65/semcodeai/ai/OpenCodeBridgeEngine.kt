@@ -51,7 +51,10 @@ class OpenCodeBridgeEngine(
         // Android's app seccomp filter SIGSYS-traps Bun syscalls; this shim
         // turns those traps into -ENOSYS so the CLI can actually run (see
         // OpenCodeBridge.GUEST_SIGSYS).
-        "LD_PRELOAD" to OpenCodeBridge.GUEST_SIGSYS
+        "LD_PRELOAD" to OpenCodeBridge.GUEST_SIGSYS,
+        "SIGSYS_LOG" to "/workspace/.semcode/sigsys.log",
+        // Bun 1.2.10+ feature flag: never use epoll_pwait2 (syscall 441).
+        "BUN_FEATURE_FLAG_DISABLE_EPOLL_PWAIT2" to "1"
     ).plus(
         if (settings.apiKey("zen").isNotBlank()) mapOf("OPENCODE_API_KEY" to settings.apiKey("zen"))
         else emptyMap()
@@ -177,7 +180,7 @@ class OpenCodeBridgeEngine(
             val full = synchronized(text) { text.toString() }
             val exit = p.exitValue()
             if (bridgeError.isNullOrBlank() && exit != 0) {
-                bridgeError = "opencode exited with $exit: ${errTail.toString().trim().takeLast(600)}"
+                bridgeError = "opencode exited with $exit: ${errTail.toString().trim().takeLast(4000)}"
             }
 
             // Map the errors users actually hit (quota, permission, infra).
@@ -187,7 +190,7 @@ class OpenCodeBridgeEngine(
                 return EngineReply("$full\n\n⚠ $friendly", emptyList())
             }
             if (!hadEvent && full.isBlank()) {
-                val detail = errTail.toString().trim().takeLast(300)
+                val detail = errTail.toString().trim().takeLast(4000)
                 throw RuntimeException("opencode produced no output${if (detail.isNotBlank()) " — $detail" else ""}")
             }
             return EngineReply(full.ifBlank { null }, emptyList())
