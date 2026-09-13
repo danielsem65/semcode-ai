@@ -64,6 +64,7 @@ class OpenCodeBridgeEngine(
         )
         OpenCodeBridge.ensureSigsysShim(app)
         OpenCodeBridge.writeKeyConfig(app, settings.apiKey("zen"))
+        OpenCodeBridge.writeResolvConf(app)
         return app.linuxEnv.rootfsDir()
     }
 
@@ -90,6 +91,9 @@ class OpenCodeBridgeEngine(
 
     private fun scriptFor(promptFile: String, extra: String = ""): String =
         "echo BRIDGE-RUN-START >&2; " +
+            "{ echo ---RESOLV-CONF---; cat /etc/resolv.conf 2>&1; " +
+            "echo ---GETHOSTS---; getent hosts models.dev api.opencode.ai 2>&1; } " +
+            "> /workspace/.semcode/oc-diag.txt; " +
             "timeout 240 /root/opencode/opencode run --format json --print-logs --auto $extra " +
             "-m '${model.replace("'", "")}' " +
             "\"$(cat '$promptFile')\" " +

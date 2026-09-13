@@ -1,5 +1,6 @@
 package com.danielsem65.semcodeai.core
 
+import android.net.ConnectivityManager
 import com.danielsem65.semcodeai.SemApp
 import java.io.File
 import java.net.HttpURLConnection
@@ -104,6 +105,26 @@ object OpenCodeBridge {
 
     private fun JSONEscape(s: String): String =
         s.replace("\\", "\\\\").replace("\"", "\\\"")
+
+    /**
+     * Inside proot the guest's /etc/resolv.conf wins for name resolution, and
+     * the Ubuntu rootfs ships without a usable one — so opencode's startup fetch
+     * of models.dev (and later the Zen API) times out long after the device
+     * itself has perfectly good connectivity. Write a resolv.conf with the
+     * phone's live DNS servers + public fallbacks before every bridge run.
+     */
+    fun writeResolvConf(app: SemApp) {
+        val servers = linkedSetOf<String>()
+        runCatching {
+            val cm = app.getSystemService(ConnectivityManager::class.java) ?: return@runCatching
+            val net = cm.activeNetwork ?: return@runCatching
+            cm.getLinkProperties(net)?.dnsServers?.forEach { servers += it.hostAddress ?: it.toString() }
+        }
+        servers += listOf("8.8.8.8", "1.1.1.1", "8.8.4.4")
+        val rc = File(app.linuxEnv.rootfsDir(), "etc/resolv.conf")
+        rc.parentFile?.mkdirs()
+        rc.writeText(servers.joinToString("\n") { "nameserver $it" } + "\n")
+    }
 
     private fun download(url: String, dst: File, onProgress: (Int) -> Unit) {
         val conn = URL(url).openConnection() as HttpURLConnection
