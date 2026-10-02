@@ -16,12 +16,27 @@ android {
         // exec() from app storage is allowed (required for the proot Linux env)
         // and enables classic full-storage permissions.
         targetSdk = 28
-        versionCode = 34
-        versionName = "2.9.0"
+        versionCode = 56
+        versionName = "2.9.0-zenfix"
+    }
+
+    signingConfigs {
+        // Same committed sideload cert as main, so this branch installs over
+        // the 2.29.0 build and every later CI build stays upgradeable.
+        create("sideload") {
+            storeFile = rootProject.file("keystore/semcode-sideload.jks")
+            storePassword = "semcode-sideload"
+            keyAlias = "semcode"
+            keyPassword = "semcode-sideload"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("sideload")
+        }
         release {
+            signingConfig = signingConfigs.getByName("sideload")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
