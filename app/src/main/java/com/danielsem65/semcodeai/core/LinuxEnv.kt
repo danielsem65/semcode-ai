@@ -467,8 +467,15 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
      */
     fun shellEnv(): Map<String, String> {
         val tmp = File(linuxDir, "tmp").apply { mkdirs() }
+        // The bundled proot is the Termux fork: it cannot exec() itself under the
+        // app sandbox, so it relaunches through libproot_loader.so. That loader
+        // dlopen()s libtalloc2.so and libandroid-shmem.so, so both must be on
+        // LD_LIBRARY_PATH. Without these three vars proot dies before it starts.
+        val ndir = context.applicationInfo.nativeLibraryDir
         return mapOf(
             "PROOT_TMP_DIR" to tmp.absolutePath,
+            "PROOT_LOADER" to File(ndir, "libproot_loader.so").absolutePath,
+            "LD_LIBRARY_PATH" to ndir,
             "PATH" to GUEST_PATH,
             "HOME" to "/root",
             "TERM" to "xterm"
