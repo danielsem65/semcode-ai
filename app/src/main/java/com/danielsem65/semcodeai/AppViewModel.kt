@@ -314,40 +314,58 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun dispatch(name: String, argsJson: String): String {
-        val args = runCatching { JSONObject(argsJson) }.getOrDefault(JSONObject())
+        // Aliases for the canonical tool names Zen's gateway requires us to
+        // advertise. The model may pick either spelling; both must work.
+        val tool = when (name) {
+            "bash" -> "run_command"
+            "read" -> "read_file"
+            else -> name
+        }
+        val args = runCatching { JSONObject(argsJson) }.getOrElse {
+            // Never silently degrade to {} — that turns a malformed call into a
+            // baffling "No value for <arg>" from deep inside FileOps.
+            return "ERROR in $tool: arguments were not valid JSON (${it.message}). " +
+                "Resend as a JSON object of named arguments, e.g. " +
+                "{\"path\": \"Projects\"}. Do not repeat the identical call."
+        }
         return withContext(Dispatchers.IO) {
             try {
-                if (name in APPROVAL_TOOLS && !gateIfNeeded(name, argsJson)) {
+                if (tool in APPROVAL_TOOLS && !gateIfNeeded(tool, argsJson)) {
                     "DENIED_BY_USER — the user rejected this action. Ask what they'd prefer or continue without it."
-                } else when (name) {
+                } else when (tool) {
                     "run_command" -> activeShell().exec(
                         args.optString("command", ""),
                         args.optLong("timeout_seconds", 30).coerceIn(1, 600)
                     )
                     else ->
-                        if (name.startsWith("github_")) githubDispatch(name, args)
-                        else fileOps.execute(name, args)
+                        if (tool.startsWith("github_")) githubDispatch(tool, args)
+                        else fileOps.execute(tool, args)
                 }
             } catch (e: Exception) {
                 // Small models repeat a failing call verbatim unless the error
                 // tells them exactly what went wrong and how to fix it.
                 val required = runCatching {
                     com.danielsem65.semcodeai.ai.Tools.all()
-                        .firstOrNull { it.name == name }?.parameters
+                        .firstOrNull { it.name == tool }?.parameters
                         ?.optJSONArray("required")
                         ?.let { r -> (0 until r.length()).map { r.optString(it) } }
                 }.getOrNull().orEmpty()
+                val received = args.keys().asSequence().toList()
                 buildString {
-                    append("ERROR in $name: ${e.message ?: "call failed"}. ")
+                    append("ERROR in $tool: ${e.message ?: "call failed"}. ")
                     if (required.isEmpty()) {
                         append("Check your arguments are valid JSON with the correct keys. ")
                     } else {
                         append("Required argument(s): ${required.joinToString(", ")}. ")
                         append(
-                            "Call again as {\"name\": \"$name\", \"arguments\": {" +
+                            "Call again as {\"name\": \"$tool\", \"arguments\": {" +
                                 required.joinToString(", ") { "\"$it\": \"...\"" } + "}}. "
                         )
                     }
+                    // The usual cause is a dropped or misspelled key — naming
+                    // what actually arrived stops the retry loop.
+                    if (received.isEmpty()) append("Your call arrived with NO arguments at all. ")
+                    else append("Arguments actually received: ${received.joinToString(", ")}. ")
                     append("Fix the arguments — do NOT repeat the identical call.")
                 }
             }
@@ -452,9 +470,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }.getOrDefault("")
 
         if (summary.isBlank()) return
+
+        // Trim the kept window to a valid tool-call sequence. A tool exchange
+        // is two messages (ToolUse + ToolResult), so a fixed-size slice almost
+        // never lands on a boundary: a leading ToolResult is an orphan with no
+        // preceding assistant tool_calls, and a trailing ToolUse is a call with
+        // no result. Either one makes the provider reject the request as
+        // "[invalidrequesterror] invalid request".
+        var kept = apiHistory.takeLast(COMPACT_KEEP)
+        while (kept.isNotEmpty() && (kept.first() is Msg.ToolResult || kept.first() is Msg.ToolUse)) {
+            kept = kept.drop(1)
+        }
+        while (kept.isNotEmpty() && kept.last() is Msg.ToolUse) {
+            kept = kept.dropLast(1)
+        }
+        if (kept.isEmpty()) return
+
         apiHistory.clear()
-        apiHistory += Msg.AssistantText("[Context compacted — summary of earlier work]\n$summary")
-        apiHistory += tail
+        // Carry the summary as a user turn: after compaction the history would
+        // otherwise open on an assistant message, which some upstreams reject.
+        apiHistory += Msg.User("[Earlier context was compacted to save space. Handover notes:\n$summary")
+        apiHistory += kept
     }
 
     private fun systemPrompt(): String {

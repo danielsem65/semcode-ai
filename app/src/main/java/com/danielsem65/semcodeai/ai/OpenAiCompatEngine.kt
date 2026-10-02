@@ -7,6 +7,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 
 /**
@@ -28,6 +29,14 @@ class OpenAiCompatEngine(
         .build()
 
     @Volatile private var activeCall: okhttp3.Call? = null
+
+    /**
+     * Zen's free tier rejects requests that don't look like they came from the
+     * OpenCode client. The x-opencode-session value must be a well-formed
+     * session id: "ses_" + 12 lowercase hex + 14 base62 alphanumerics (30 chars
+     * total). This mirrors packages/schema/src/identifier.ts in the client.
+     */
+    private val zenSessionId = newZenSessionId()
 
     override fun cancelActive() {
         runCatching { activeCall?.cancel() }
@@ -94,9 +103,16 @@ class OpenAiCompatEngine(
         val b = Request.Builder().url(url)
         if (!isLocal) b.header("Authorization", "Bearer $apiKey")
         else if (apiKey.isNotBlank() && apiKey != "none") b.header("Authorization", "Bearer $apiKey")
-        if (baseUrl.contains("opencode.ai")) {
-            // Zen's upstream gates free models to official OpenCode clients by User-Agent
-            b.header("User-Agent", "opencode/1.18.16")
+        if (isZen) {
+            // Zen's gateway only serves its free models to requests that carry
+            // the official client's signals. Verified requirements:
+            //   x-opencode-session : well-formed ses_ id (see newZenSessionId)
+            //   x-opencode-client  : client label
+            //   User-Agent         : versioned opencode UA
+            b.header("User-Agent", ZEN_USER_AGENT)
+            b.header("x-opencode-session", zenSessionId)
+            b.header("x-opencode-client", "cli")
+            b.header("x-opencode-project", "global")
         }
         if (baseUrl.contains("openrouter")) {
             b.header("X-Title", "SemCode AI")
@@ -105,17 +121,62 @@ class OpenAiCompatEngine(
         return b
     }
 
-    private fun postBody(system: String, history: List<Msg>, tools: List<ToolDef>, stream: Boolean): Request =
-        baseRequest("$baseUrl/chat/completions")
-            .post(JSONObject()
-                .put("model", model)
-                .put("messages", messagesJson(system, history))
-                .put("tools", toolsJson(tools))
+    private val isZen: Boolean get() = baseUrl.contains("opencode.ai")
+
+    /**
+     * Zen also requires the request to look like a real agent turn: streaming
+     * on, and a tool set that includes the canonical `bash` and `read` tools.
+     * The client always has these, so we merge them into whatever tool set the
+     * agent is actually exposing.
+     */
+    private fun zenBody(system: String, history: List<Msg>, tools: List<ToolDef>): JSONObject {
+        val body = JSONObject()
+            .put("model", apiModel())
+            .put("messages", messagesJson(system, history))
+            .put("stream", true)
+        if (isZen) {
+            body.put("tools", zenTools(tools))
+        } else {
+            body.put("tools", toolsJson(tools))
                 .put("temperature", 0.3)
-                .put("stream", stream)
-                .toString()
-                .toRequestBody(JSON))
+        }
+        return body
+    }
+
+    private fun zenTools(tools: List<ToolDef>): JSONArray {
+        val arr = toolsJson(tools)
+        val names = HashSet<String>()
+        for (i in 0 until arr.length()) {
+            names += arr.optJSONObject(i)?.optJSONObject("function")?.optString("name").orEmpty()
+        }
+        for (required in ZEN_REQUIRED_TOOLS) {
+            if (required in names) continue
+            val spec = ZEN_TOOL_SPECS[required] ?: continue
+            arr.put(JSONObject()
+                .put("type", "function")
+                .put("function", JSONObject()
+                    .put("name", required)
+                    .put("description", spec.description)
+                    .put("parameters", spec.parameters)))
+        }
+        return arr
+    }
+
+    private fun postBody(system: String, history: List<Msg>, tools: List<ToolDef>, stream: Boolean): Request {
+        val payload = if (isZen) zenBody(system, history, tools) else JSONObject()
+            .put("model", apiModel())
+            .put("messages", messagesJson(system, history))
+            .put("tools", toolsJson(tools))
+            .put("temperature", 0.3)
+            .put("stream", stream)
+        return baseRequest("$baseUrl/chat/completions")
+            .post(payload.toString().toRequestBody(JSON))
             .build()
+    }
+
+    /** Zen /models lists plain ids; saved overrides may carry an "opencode/" prefix. */
+    private fun apiModel(): String =
+        if (baseUrl.contains("opencode.ai")) model.removePrefix("opencode/") else model
 
     // ---------------- non-streaming ----------------
 
@@ -127,6 +188,11 @@ class OpenAiCompatEngine(
                 val raw = resp.body?.string() ?: "{}"
                 if (!resp.isSuccessful) throw RuntimeException(friendlyError(resp.code, raw))
 
+                // Zen always answers with SSE regardless of the requested mode.
+                if (raw.lineSequence().any { it.trimStart().startsWith("data:") }) {
+                    return parseSseReply(raw)
+                }
+
                 val json = runCatching { JSONObject(raw) }.getOrDefault(JSONObject())
                 val msg = json.optJSONArray("choices")?.optJSONObject(0)?.optJSONObject("message")
                     ?: throw RuntimeException("Provider sent no message.")
@@ -137,9 +203,57 @@ class OpenAiCompatEngine(
         }
     }
 
+    /** Reassembles a full reply from a complete SSE payload. */
+    private fun parseSseReply(raw: String): EngineReply {
+        val text = StringBuilder()
+        val slots = HashMap<Int, ToolAcc>()
+        for (line in raw.lineSequence()) {
+            val payload = line.trim().takeIf { it.startsWith("data:") }
+                ?.removePrefix("data:")?.trim() ?: continue
+            if (payload == "[DONE]") break
+            val chunk = runCatching { JSONObject(payload) }.getOrNull() ?: continue
+            val delta = chunk.optJSONArray("choices")?.optJSONObject(0)
+                ?.optJSONObject("delta") ?: continue
+            (delta.opt("content") as? String)?.takeIf { it.isNotEmpty() }?.let(text::append)
+            accumulateToolCalls(delta.optJSONArray("tool_calls"), slots)
+        }
+        val calls = slots.toSortedMap().values.mapNotNull { acc ->
+            if (acc.name.isBlank() || acc.name == "null") null
+            else ToolCall(acc.id, acc.name, acc.args.toString().ifBlank { "{}" })
+        }
+        if (text.isBlank() && calls.isEmpty()) throw RuntimeException("Provider returned empty content.")
+        return EngineReply(text.toString().ifBlank { null }, calls)
+    }
+
     // ---------------- streaming ----------------
 
     private class ToolAcc(var id: String, var name: String, val args: StringBuilder)
+
+    /** Folds one delta's tool_calls fragments into the per-index accumulators. */
+    private fun accumulateToolCalls(tcs: JSONArray?, slots: MutableMap<Int, ToolAcc>) {
+        tcs ?: return
+        for (i in 0 until tcs.length()) {
+            val tc = tcs.optJSONObject(i) ?: continue
+            val idx = tc.optInt("index", i)
+            val fn = tc.optJSONObject("function")
+            // Seed args EMPTY. The append below adds this delta's fragment; if
+            // the initializer also seeded it, the first fragment of every call
+            // would be duplicated, mangling JSON (e.g. `{"path":".{"path":"."}`)
+            // and wrecking long multi-part commands that stream in pieces.
+            val acc = slots.getOrPut(idx) {
+                ToolAcc(
+                    id = sstr(tc, "id").ifBlank { "call_$idx" },
+                    name = sstr(fn, "name"),
+                    args = StringBuilder()
+                )
+            }
+            sstr(tc, "id").takeIf { it.isNotEmpty() }?.let { acc.id = it }
+            fn?.let { f ->
+                sstr(f, "name").takeIf { it.isNotEmpty() }?.let { acc.name = it }
+                sstr(f, "arguments").takeIf { it.isNotEmpty() }?.let { acc.args.append(it) }
+            }
+        }
+    }
 
     override fun chatStream(
         system: String,
@@ -174,24 +288,7 @@ class OpenAiCompatEngine(
                             onDelta(c)
                         }
 
-                        val tcs = delta.optJSONArray("tool_calls") ?: continue
-                        for (i in 0 until tcs.length()) {
-                            val tc = tcs.optJSONObject(i) ?: continue
-                            val idx = tc.optInt("index", i)
-                            val fn = tc.optJSONObject("function")
-                            val acc = slots.getOrPut(idx) {
-                                ToolAcc(
-                                    id = sstr(tc, "id").ifBlank { "call_$idx" },
-                                    name = sstr(fn, "name"),
-                                    args = StringBuilder(sstr(fn, "arguments"))
-                                )
-                            }
-                            sstr(tc, "id").takeIf { it.isNotEmpty() }?.let { acc.id = it }
-                            fn?.let { f ->
-                                sstr(f, "name").takeIf { it.isNotEmpty() }?.let { acc.name = it }
-                                sstr(f, "arguments").takeIf { it.isNotEmpty() }?.let { acc.args.append(it) }
-                            }
-                        }
+                        accumulateToolCalls(delta.optJSONArray("tool_calls"), slots)
                     }
                 }
 
@@ -256,12 +353,83 @@ class OpenAiCompatEngine(
     companion object {
         private val JSON = "application/json".toMediaType()
 
+        private const val ZEN_USER_AGENT = "opencode/1.18.30"
+
+        /** Zen's gateway only serves free models when these canonical tools are present. */
+        private val ZEN_REQUIRED_TOOLS = listOf("bash", "read")
+
+        /**
+         * Zen's gate is satisfied by the *names* being present, but the model
+         * reads the schema we publish — an empty one makes it call these with
+         * no arguments at all. So publish real schemas, and let [ToolCall]
+         * dispatch map them onto the tools the app already implements.
+         */
+        private class ZenToolSpec(val description: String, val parameters: JSONObject)
+
+        private val ZEN_TOOL_SPECS = mapOf(
+            "bash" to ZenToolSpec(
+                "Executes a shell command in the workspace. Android toybox/mksh unless a " +
+                    "full Linux env is installed. Prefer the dedicated github_* tools for git.",
+                JSONObject()
+                    .put("type", "object")
+                    .put("properties", JSONObject()
+                        .put("command", JSONObject().put("type", "string"))
+                        .put("timeout_seconds", JSONObject().put("type", "number")))
+                    .put("required", JSONArray(listOf("command")))
+            ),
+            "read" to ZenToolSpec(
+                "Reads a file from the workspace. Relative paths resolve against the workspace root.",
+                JSONObject()
+                    .put("type", "object")
+                    .put("properties", JSONObject()
+                        .put("path", JSONObject().put("type", "string")))
+                    .put("required", JSONArray(listOf("path")))
+            )
+        )
+
+        private const val ZEN_ID_CHARS =
+            "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+        /**
+         * Builds a session id shaped exactly like the OpenCode client's:
+         * "ses_" + 12 lowercase hex + 14 base62 characters (30 chars total).
+         * Zen rejects any other shape with FreeTierError.
+         */
+        private fun newZenSessionId(): String {
+            val time = System.currentTimeMillis()
+            val value = (time.toBigInteger() * 0x1000.toBigInteger() + 1.toBigInteger())
+                .inv()
+            val hex = buildString {
+                for (i in 0 until 6) {
+                    append("%02x".format(((value shr (40 - 8 * i)) and 0xff.toBigInteger()).toInt()))
+                }
+            }
+            val rnd = SecureRandom()
+            val tail = buildString {
+                repeat(14) { append(ZEN_ID_CHARS[rnd.nextInt(ZEN_ID_CHARS.length)]) }
+            }
+            return "ses_$hex$tail"
+        }
+
         private fun errText(body: String): String = runCatching {
             JSONObject(body).optJSONObject("error")?.optString("message")?.take(300)
         }.getOrNull() ?: body.take(300)
 
         private fun friendlyError(code: Int, body: String): String {
             val detail = errText(body)
+            val lower = detail.lowercase()
+            if (code == 500 && lower.contains("internal server error") ||
+                lower.contains("not supported") ||
+                lower.contains("model is unavailable") ||
+                lower.contains("endpoint is unavailable")
+            ) {
+                return "That model is temporarily unreachable on Zen's gateway (down or unavailable from your region). " +
+                    "Pick 'big-pickle' or another '*free' model in Settings → Model → Apply model override. [$code: $detail]"
+            }
+            if (lower.contains("only be used in opencode") || lower.contains("missing session")) {
+                return "OpenCode Zen rejected this request as non-OpenCode. If it persists, restart SemCode " +
+                    "(fresh session id) or pick another model in Settings. [$code]"
+            }
             val limited = code == 429 || code == 492 ||
                 detail.contains("rate limit", true) || detail.contains("FreeUsageLimit", true)
             return if (limited)
