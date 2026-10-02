@@ -44,6 +44,66 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
 
     private val linuxDir get() = File(context.filesDir, "linux")
     private val rootfs get() = File(linuxDir, "rootfs")
+    private val prootBinary get() = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
+
+    // ---------------- proot capability ----------------
+
+    private var prootVersionProbed = false
+    private var prootVersionCache: String? = null
+
+    /**
+     * Version of the shipped proot for this device's ABI, e.g. "2.3.1", or null
+     * when it cannot be determined.
+     *
+     * Read out of the ELF rather than by running `proot --version`: diagnose()
+     * is called from the main thread (SettingsScreen refresh), and spawning a
+     * process there is an ANR waiting to happen. proot builds its banner from
+     * separate literals — "PRoot", "<version>", "chroot, mount --bind, ..." —
+     * so the version is the last version-shaped token before that banner text.
+     * There is exactly one such token in that window in every build we ship.
+     */
+    fun prootVersion(): String? {
+        if (prootVersionProbed) return prootVersionCache
+        prootVersionProbed = true
+        val bin = prootBinary
+        if (!bin.exists() || !bin.isFile) return null
+        prootVersionCache = runCatching {
+            val text = String(bin.readBytes(), Charsets.ISO_8859_1)
+            val banner = text.indexOf(BANNER_FRAGMENT)
+            if (banner < 0) return@runCatching null
+            val window = text.substring(maxOf(0, banner - VERSION_WINDOW), banner)
+            VERSION_TOKEN.findAll(window).lastOrNull()?.value
+        }.getOrNull()
+        return prootVersionCache
+    }
+
+    /**
+     * Why this proot build cannot run a normal distro, or null when it can.
+     *
+     * PRoot only learned to translate statx() in the 5.x series (upstream lists
+     * it under 5.3.1; 5.1 already behaves correctly on Android). Ubuntu/Debian
+     * base images are built against a glibc that has __ASSUME_STATX, so
+     * ls/cat/stat/grep/find/git all call statx(). On an older proot the syscall
+     * is passed through untranslated and reaches the Android host kernel with
+     * the raw guest path. Android has no /usr, /var, /root or /workspace at its
+     * top level, so those lookups return ENOENT and the guest looks totally
+     * broken — while cd, writes and shell builtins keep working, because those
+     * go through fstatat, which proot does translate. That asymmetry is what
+     * makes this look like a rootfs problem instead of a proot problem.
+     *
+     * Alpine is largely unaffected because busybox does not use statx.
+     */
+    fun prootTooOldReason(): String? {
+        val v = prootVersion() ?: return null
+        val parts = v.split('.')
+        val major = parts.getOrNull(0)?.toIntOrNull() ?: return null
+        val minor = parts.getOrNull(1)?.toIntOrNull() ?: return null
+        return if (major < 5 || (major == 5 && minor < 1))
+            "proot $v is too old — it does not translate statx(), so every coreutils " +
+                "command fails with \"No such file or directory\" on absolute paths. " +
+                "Needs proot 5.1 or newer."
+        else null
+    }
 
     // ---------------- health ----------------
 
@@ -68,6 +128,8 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
      *  (and we, remotely) can see exactly what is on disk and where. */
     fun diagnose(): String = buildString {
         appendLine("Path: ${rootfs.absolutePath}")
+        appendLine("proot: ${prootVersion()?.let { "PRoot $it" } ?: "unreadable"}")
+        prootTooOldReason()?.let { appendLine("!! $it") }
         val shFile = File(rootfs, "bin/sh")
         append("sh: ")
         appendLine(
@@ -358,10 +420,22 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
     /**
      * Command that boots a persistent guest shell.
      * -0 fakes root (needed by apk/apt); /workspace is the shared SemCode workspace.
+     *
+     * Note: do NOT add a `--no-seccomp` flag here. PRoot 2.3.1 has no such option
+     * (its only long options are --about/--bind/--change-id/--cwd/--help/
+     * --kernel-release/--mount/--pwd/--qemu/--rootfs/--root-id/--usage/--verbose/
+     * --version), so the flag makes proot abort with
+     * "proot error: unknown option '--no-seccomp'." and exit 1 before the guest
+     * shell ever starts. Disabling the seccomp accelerator is done through the
+     * PROOT_NO_SECCOMP environment variable in shellEnv() instead.
      */
     fun prootCommand(workspace: File): List<String> {
-        val proot = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
+        val proot = prootBinary
         require(proot.exists()) { "proot binary missing from nativeLibraryDir" }
+        // proot's -b needs the mount point to exist inside the rootfs, otherwise
+        // the guest sees no /workspace at all. Created here (not at install time)
+        // so already-installed environments are repaired without a re-download.
+        runCatching { File(rootfs, WORKSPACE_MOUNT).mkdirs() }
         return listOf(
             proot.absolutePath,
             "-r", rootfs.absolutePath,
@@ -370,15 +444,35 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
             "-b", "/dev",
             "-b", "/proc",
             "-b", "/sys",
-            "-b", "${workspace.absolutePath}:/workspace",
+            "-b", "${workspace.absolutePath}:$WORKSPACE_MOUNT",
             "/bin/sh"
         )
     }
 
-    /** Extra environment for the guest shell process (proot + guest). */
+    /**
+     * Extra environment for the guest shell process (proot + guest).
+     *
+     * PATH *must* be overridden here. ShellSession defaults PATH to Android's
+     * system directories (/system/bin, /apex/...), which do not exist inside the
+     * guest rootfs — every command then fails with "not found" even though the
+     * binaries are present. envExtra is applied after the default, so this wins.
+     *
+     * Deliberately NOT setting PROOT_NO_SECCOMP here. proot's seccomp-bpf
+     * accelerator is a large speed win, and it was verified working on a
+     * Samsung OneUI device, so disabling it would cost real throughput for a
+     * failure mode that turned out not to exist (the "SIGSYS / exit 255" reports
+     * were statx ENOENT, not signals). If a genuine SIGSYS ever shows up, this
+     * is the one-line lever — it is the only way to turn the accelerator off,
+     * there is no CLI flag.
+     */
     fun shellEnv(): Map<String, String> {
         val tmp = File(linuxDir, "tmp").apply { mkdirs() }
-        return mapOf("PROOT_TMP_DIR" to tmp.absolutePath)
+        return mapOf(
+            "PROOT_TMP_DIR" to tmp.absolutePath,
+            "PATH" to GUEST_PATH,
+            "HOME" to "/root",
+            "TERM" to "xterm"
+        )
     }
 
     private fun download(url: String, dst: File, onProgress: (Int) -> Unit) {
@@ -416,5 +510,25 @@ class LinuxEnv(private val context: Context, private val workspaceProvider: () -
         } finally {
             conn.disconnect()
         }
+    }
+
+    private companion object {
+        /** Where the SemCode workspace appears inside the guest. */
+        const val WORKSPACE_MOUNT = "/workspace"
+
+        /**
+         * Guest PATH. Merged-/usr distros (Alpine, Ubuntu) keep everything under
+         * /usr/bin and /usr/sbin, with /bin and /sbin as symlinks to them.
+         */
+        const val GUEST_PATH =
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+        /** Tail of the version banner proot prints, used to locate its version. */
+        const val BANNER_FRAGMENT = "chroot, mount --bind"
+
+        /** How far back from the banner to look for the version literal. */
+        const val VERSION_WINDOW = 4096
+
+        val VERSION_TOKEN = Regex("""(?<![\w.])\d+\.\d+\.\d+(?![\w.])""")
     }
 }
